@@ -2,12 +2,12 @@ import type { RawTrackRecord } from '../types';
 
 const CLIENT_ID = import.meta.env.VITE_SPOTIFY_CLIENT_ID || '663e5f2a2950473ba037426e5343b8df'; 
 const getRedirectUri = (): string => {
-  // If explicitly overridden via env and not running on localhost, use it
-  if (import.meta.env.VITE_SPOTIFY_REDIRECT_URI && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
-    return import.meta.env.VITE_SPOTIFY_REDIRECT_URI.replace(/\/$/, '');
+  // If running in browser, ALWAYS dynamically use current origin so Vercel and local both work identically
+  if (typeof window !== 'undefined' && window.location.origin) {
+    const origin = window.location.origin.replace(/\/$/, '');
+    return origin;
   }
-  const path = window.location.pathname === '/' ? '' : window.location.pathname;
-  return `${window.location.origin}${path}`.replace(/\/$/, '');
+  return 'https://music-taste-graph.vercel.app';
 };
 
 const SCOPES = ['user-top-read'];
