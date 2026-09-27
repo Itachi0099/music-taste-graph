@@ -2,17 +2,13 @@ import type { RawTrackRecord, ListeningEvent, SpotifyPlaybackState } from '../ty
 
 const CLIENT_ID = import.meta.env.VITE_SPOTIFY_CLIENT_ID || '663e5f2a2950473ba037426e5343b8df';
 
-export const SPOTIFY_REDIRECT_URI = 'http://127.0.0.1:5173/';
+export const SPOTIFY_REDIRECT_URI =
+  import.meta.env.VITE_SPOTIFY_REDIRECT_URI ||
+  (import.meta.env.PROD
+    ? 'https://music-taste-graph.vercel.app/'
+    : 'http://127.0.0.1:5173/');
 
 export const getRedirectUri = (): string => {
-  if (typeof window !== 'undefined' && window.location.origin) {
-    const origin = window.location.origin;
-    if (origin.includes('127.0.0.1') || origin.includes('localhost')) {
-      return SPOTIFY_REDIRECT_URI;
-    }
-    // Production (e.g. Vercel) - ensure exact trailing slash matching registered dashboard URI
-    return `${origin.replace(/\/+$/, '')}/`;
-  }
   return SPOTIFY_REDIRECT_URI;
 };
 
@@ -195,6 +191,8 @@ export const getSpotifyToken = async (): Promise<string | null> => {
     localStorage.getItem('spotify_redirect_uri') ||
     sessionStorage.getItem('spotify_redirect_uri') ||
     getRedirectUri();
+
+  console.log("SPOTIFY REDIRECT URI:", redirectUri);
 
   tokenExchangePromise = (async () => {
     try {
