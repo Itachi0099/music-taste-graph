@@ -1,47 +1,146 @@
 @import "tailwindcss";
 
 @theme {
-  --color-neon-purple: #9d4edd;
-  --color-neon-cyan: #00f5d4;
-  --color-neon-emerald: #06d6a0;
-  --color-slate-900: #0f172a;
-  --color-slate-800: #1e293b;
-  --color-slate-700: #334155;
-  --color-zinc-950: #09090b;
+  --font-sans: "Plus Jakarta Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --font-serif: "Newsreader", Georgia, Cambria, "Times New Roman", Times, serif;
+  --font-mono: "JetBrains Mono", Menlo, Monaco, Consolas, monospace;
 }
 
 body {
   margin: 0;
-  background-color: var(--color-zinc-950);
-  color: #fff;
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol";
+  font-family: var(--font-sans);
+  font-size: 0.875rem;
+  letter-spacing: -0.01em;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
-/* React Flow custom edge styles */
+/* Light Theme Variables */
+:root {
+  --bg-primary: #FAF9F5;
+  --bg-surface: #F4F2EC;
+  --bg-card: #FFFFFF;
+  --border-primary: #E8E5DE;
+  --border-subtle: #EFECE6;
+  --border-hover: #171717;
+
+  --text-primary: #171717;
+  --text-secondary: #525252;
+  --text-tertiary: #737373;
+  --text-muted: #A3A3A3;
+
+  --edge-color: #D6D2C8;
+  --edge-active: #171717;
+  --handle-color: #A3A3A3;
+  --control-bg: #FFFFFF;
+  --control-border: #E8E5DE;
+  --control-hover: #FAF9F5;
+  --control-fill: #525252;
+}
+
+/* Dark Theme Variables: Soothing, warm midnight & charcoal palette */
+.dark {
+  --bg-primary: #111215;
+  --bg-surface: #18191E;
+  --bg-card: #1D1F24;
+  --border-primary: #2B2D33;
+  --border-subtle: #222329;
+  --border-hover: #E5E7EB;
+
+  --text-primary: #EDEDED;
+  --text-secondary: #B5B5B5;
+  --text-tertiary: #888888;
+  --text-muted: #666666;
+
+  --edge-color: #2F323A;
+  --edge-active: #EDEDED;
+  --handle-color: #666666;
+  --control-bg: #18191E;
+  --control-border: #2B2D33;
+  --control-hover: #222329;
+  --control-fill: #B5B5B5;
+}
+
+/* Subtle editorial scrollbar */
+::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--border-primary);
+  border-radius: 9999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-muted);
+}
+
+/* React Flow editorial edge styles */
 .react-flow__edge-path {
-  stroke: rgba(255, 255, 255, 0.2);
-  stroke-width: 2;
+  stroke: var(--edge-color);
+  stroke-width: 1.25;
+  transition: stroke 0.2s ease, stroke-width 0.2s ease, opacity 0.2s ease;
 }
 
 .react-flow__edge.active .react-flow__edge-path {
-  stroke: var(--color-neon-cyan);
-  stroke-width: 3;
+  stroke: var(--edge-active);
+  stroke-width: 2;
 }
 
 .react-flow__edge.dimmed .react-flow__edge-path {
-  opacity: 0.1;
+  opacity: 0.12;
 }
 
-/* Base custom styles for our dark theme */
+/* React Flow handles: extremely minimal */
+.react-flow__handle {
+  width: 6px;
+  height: 6px;
+  border-radius: 9999px;
+  background: var(--handle-color);
+  border: 1.5px solid var(--bg-primary);
+  opacity: 0;
+  transition: opacity 0.2s ease, transform 0.2s ease;
+}
+
+.group:hover .react-flow__handle,
+.react-flow__node:hover .react-flow__handle {
+  opacity: 0.8;
+}
+
+/* React Flow attribution & controls styling */
+.react-flow__attribution {
+  display: none !important;
+}
+
+.react-flow__controls {
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.15) !important;
+  border: 1px solid var(--control-border) !important;
+  border-radius: 8px !important;
+  overflow: hidden !important;
+  background: var(--control-bg) !important;
+}
+
+.react-flow__controls button {
+  border-bottom: 1px solid var(--border-subtle) !important;
+  background: var(--control-bg) !important;
+  fill: var(--control-fill) !important;
+  color: var(--control-fill) !important;
+}
+
+.react-flow__controls button:hover {
+  background: var(--control-hover) !important;
+  fill: var(--text-primary) !important;
+}
+
+/* App container */
 .app-container {
   display: flex;
   flex-direction: column;
   height: 100vh;
   width: 100vw;
   overflow: hidden;
-}
-
-.canvas-container {
-  flex: 1;
-  position: relative;
+  background-color: var(--bg-primary);
+  color: var(--text-primary);
 }

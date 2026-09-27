@@ -1,6 +1,5 @@
 import React from 'react';
 import { Handle, Position } from '@xyflow/react';
-import { Disc } from 'lucide-react';
 import type { GraphNodeData } from '../../../types';
 
 interface TrackNodeProps {
@@ -8,22 +7,36 @@ interface TrackNodeProps {
 }
 
 export const TrackNode: React.FC<TrackNodeProps> = ({ data }) => {
+  const isSelected = Boolean(data.selected);
+  const isDimmed = Boolean(data.dimmed);
+
   return (
-    <div className="relative px-3 py-2 shadow-sm rounded-md bg-slate-900 border border-slate-700 min-w-[100px] max-w-[160px] flex items-center gap-2 transition-colors hover:border-neon-emerald/50">
-      <Handle type="target" position={Position.Top} className="w-2 h-2 bg-neon-emerald border-2 border-slate-900" />
-      <Handle type="source" position={Position.Bottom} className="w-2 h-2 bg-neon-emerald border-2 border-slate-900 opacity-0" />
+    <div 
+      className={`group relative px-3 py-2 rounded-md border text-left cursor-pointer select-none min-w-[130px] max-w-[190px] transition-all duration-200 ${
+        isSelected
+          ? 'bg-[var(--bg-card)] border-[var(--text-primary)] ring-1 ring-[var(--text-primary)] shadow-md scale-105'
+          : 'bg-[var(--bg-surface)] border-[var(--border-subtle)] hover:bg-[var(--bg-card)] hover:border-[var(--border-primary)] shadow-xs hover:shadow-sm'
+      }`}
+      style={{
+        opacity: isDimmed ? 0.2 : 0.9,
+        transition: 'transform 0.2s ease, opacity 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease',
+      }}
+    >
+      <Handle type="target" position={Position.Top} className="!opacity-0 !w-1 !h-1" />
+      <Handle type="source" position={Position.Bottom} className="!opacity-0 !w-1 !h-1" />
+      <Handle type="target" id="left" position={Position.Left} className="!opacity-0 !w-1 !h-1" />
+      <Handle type="source" id="right" position={Position.Right} className="!opacity-0 !w-1 !h-1" />
+
+      <span 
+        className="font-sans text-xs text-[var(--text-primary)] font-medium truncate block leading-tight" 
+        title={data.label}
+      >
+        {data.label}
+      </span>
       
-      <Disc size={14} className="text-neon-emerald flex-shrink-0" />
-      
-      <div className="flex flex-col overflow-hidden">
-        <span className="font-medium text-slate-200 text-xs truncate" title={data.label}>
-          {data.label}
-        </span>
-        {data.bpm && (
-          <span className="text-[10px] text-slate-500 font-mono">
-            {data.bpm} BPM
-          </span>
-        )}
+      <div className="flex items-center justify-between mt-1 text-[9.5px] text-[var(--text-muted)] font-mono">
+        <span className="truncate max-w-[75px]">{data.artist}</span>
+        {data.bpm ? <span>{data.bpm} bpm</span> : null}
       </div>
     </div>
   );
