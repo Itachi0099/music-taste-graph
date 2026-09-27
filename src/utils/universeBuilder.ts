@@ -8,12 +8,14 @@ import type {
   CelestialUniverseData,
   UniverseAsteroid,
   UniverseMeteor,
+  ListeningEvent,
+  SpotifyPlaybackState,
 } from '../types';
 import { getCelestialGenreColor } from './celestialColors';
 import { generateDiscoveryRecommendations } from './discoveryEngine';
+import { extractTasteProfile } from './tasteProfile';
 
-// Genre relationships and affinity matrix for organic celestial placement
-// Genres with stronger musical relationships gravitate closer in the universe
+// Semantic genre relationships and affinity matrix for stable, organic spatial placement
 const GENRE_AFFINITIES: Record<string, string[]> = {
   'Techno': ['Schranz', 'Acid Techno', 'Industrial', 'Trance', 'Breakbeat', 'House', 'Progressive House'],
   'House': ['Progressive House', 'Alternative Dance', 'Nu Disco', 'French House', 'Techno'],
@@ -38,14 +40,20 @@ const GENRE_AFFINITIES: Record<string, string[]> = {
 };
 
 /**
- * Builds the hierarchical personal celestial universe from raw track records.
- * Follows the celestial hierarchy:
- * Universe -> Major Genres (Suns) -> Related Genres (Planets/Moons) -> Artists (Smaller Stars) -> Tracks (Orbiting Bodies)
+ * Builds the hierarchical personal celestial universe from normalized track records,
+ * listening events, and active playback state.
  */
-export function buildCelestialUniverse(records: RawTrackRecord[], _isDark: boolean = true): CelestialUniverseData {
+export function buildCelestialUniverse(
+  records: RawTrackRecord[],
+  _isDark: boolean = true,
+  listeningEvents?: ListeningEvent[],
+  playbackState?: SpotifyPlaybackState | null
+): CelestialUniverseData {
   if (!records.length) {
     return { genres: [], artists: [], bridges: [], allTracks: [] };
   }
+
+  const tasteProfile = extractTasteProfile(records);
 
   // 1. Group records by Genre, Artist, and Subgenre
   const genreRecords = new Map<string, RawTrackRecord[]>();
@@ -66,27 +74,27 @@ export function buildCelestialUniverse(records: RawTrackRecord[], _isDark: boole
     artistGenres.get(artist)!.add(genre);
   });
 
-  // Sort major genres by importance (track count)
+  // Sort major genres deterministically by importance / track count
   const sortedGenres = Array.from(genreRecords.entries()).sort(
     (a, b) => b[1].length - a[1].length
   );
 
   const numGenres = sortedGenres.length;
 
-  // 2. Position Major Genres organically based on mutual relationships
-  // Use a celestial orbit radius from galactic core with natural organic angular placement
+  // 2. Position Major Genres with stable spatial layout
+  // Deterministic clustering so related genres remain adjacent across renders
   const genreCenterMap = new Map<string, { 
     x: number; 
     y: number; 
     radius: number; 
     color: string;
     celestialColor: import('./celestialColors').CelestialColorIdentity;
+    activityLevel: number;
+    brightness: number;
   }>();
 
-  // Determine galactic spread
   const galacticBaseRadius = Math.max(500, numGenres * 110);
 
-  // Cluster genres so musically related genres (e.g. Techno & House or Ambient & IDM) are positioned adjacent
   const orderedGenres: Array<[string, RawTrackRecord[]]> = [];
   const visited = new Set<string>();
 
@@ -96,7 +104,6 @@ export function buildCelestialUniverse(records: RawTrackRecord[], _isDark: boole
     const item = sortedGenres.find(([n]) => n === gName);
     if (item) orderedGenres.push(item);
 
-    // Pull closely related genres adjacent to form mutual gravitational clusters
     const affinities = GENRE_AFFINITIES[gName] || [];
     affinities.forEach((aff) => {
       const match = sortedGenres.find(([n]) => n === aff && !visited.has(n));
@@ -107,33 +114,65 @@ export function buildCelestialUniverse(records: RawTrackRecord[], _isDark: boole
     });
   });
 
-  // Any remaining genres
   sortedGenres.forEach((entry) => {
     if (!visited.has(entry[0])) {
       orderedGenres.push(entry);
     }
   });
 
-  // Compute organic angle for each major genre
+  // Check which genres have active listening events recently
+  const recentGenreActivity = new Map<string, number>();
+  if (listeningEvents && listeningEvents.length > 0) {
+    listeningEvents.slice(0, 15).forEach((evt, idx) => {
+      const g = evt.genre;
+      const weight = 1.0 - idx * 0.06;
+      recentGenreActivity.set(g, (recentGenreActivity.get(g) || 0) + weight);
+    });
+  }
+
+  // Active playback boost
+  if (playbackState?.isPlaying && playbackState.artistName) {
+    const currentArtist = playbackState.artistName.toLowerCase();
+    for (const [artistName, genres] of artistGenres.entries()) {
+      if (artistName.toLowerCase() === currentArtist) {
+        genres.forEach((g) => {
+          recentGenreActivity.set(g, (recentGenreActivity.get(g) || 0) + 2.5);
+        });
+      }
+    }
+  }
+
+  // Compute stable position and dynamic activity for each major genre
   orderedGenres.forEach(([genreName, gTracks], idx) => {
     const trackCount = gTracks.length;
-    // Major genre sun radius scales with library presence: 36px to 64px
+    // Scale sun radius with genre presence
     const sunRadius = Math.min(68, Math.max(34, 28 + Math.sqrt(trackCount) * 8.5));
 
     // Base angle around galactic center
     const angle = (idx / numGenres) * Math.PI * 2 - Math.PI / 2;
 
-    // Subtle harmonic variation based on genre index to avoid rigid circles
     const distanceWobble = 0.86 + 0.28 * Math.sin(idx * 2.45 + 0.8);
     const dist = galacticBaseRadius * distanceWobble;
 
     const gx = Math.cos(angle) * dist;
-    const gy = Math.sin(angle) * dist * 0.85; // Slight elliptical galaxy tilt
+    const gy = Math.sin(angle) * dist * 0.85;
 
     const celestialColor = getCelestialGenreColor(genreName);
     const color = celestialColor.primary;
 
-    genreCenterMap.set(genreName, { x: gx, y: gy, radius: sunRadius, color, celestialColor });
+    const rawActivity = recentGenreActivity.get(genreName) || 0;
+    const activityLevel = Number(Math.min(1.0, rawActivity * 0.3).toFixed(2));
+    const brightness = 1.0 + activityLevel * 0.45;
+
+    genreCenterMap.set(genreName, { 
+      x: gx, 
+      y: gy, 
+      radius: sunRadius, 
+      color, 
+      celestialColor,
+      activityLevel,
+      brightness,
+    });
   });
 
   // 3. For each Major Genre, discover its secondary subgenres (planets & moons)
@@ -142,7 +181,6 @@ export function buildCelestialUniverse(records: RawTrackRecord[], _isDark: boole
   sortedGenres.forEach(([genreName, gTracks]) => {
     const center = genreCenterMap.get(genreName)!;
 
-    // Group by subgenre within this genre
     const subgenreCountMap = new Map<string, number>();
     gTracks.forEach((t) => {
       const sub = t.subgenre?.trim() || '';
@@ -151,26 +189,24 @@ export function buildCelestialUniverse(records: RawTrackRecord[], _isDark: boole
       }
     });
 
+    const sortedSubs = Array.from(subgenreCountMap.entries()).sort((a, b) => b[1] - a[1]);
     const subgenres: UniverseSubgenre[] = [];
-    const sortedSubgenres = Array.from(subgenreCountMap.entries()).sort((a, b) => b[1] - a[1]);
 
-    sortedSubgenres.forEach(([subName, count], sIdx) => {
-      // Planet vs Moon classification
-      const tier: 'planet' | 'moon' = count >= 2 ? 'planet' : 'moon';
-      // Distance represents relationship strength: closer = stronger relationship
-      const baseDistance = tier === 'planet' ? center.radius + 75 + sIdx * 35 : center.radius + 140 + sIdx * 25;
-      const subAngle = (sIdx / Math.max(1, sortedSubgenres.length)) * Math.PI * 2 + (idxGenre(genreName) * 0.5);
+    sortedSubs.forEach(([subName, sCount], sIdx) => {
+      const isPlanet = sCount >= 2;
+      const angle = (sIdx / Math.max(1, sortedSubs.length)) * Math.PI * 2 + 0.35;
+      const distance = center.radius + 45 + sIdx * 24;
 
       subgenres.push({
         id: `subgenre-${genreName}-${subName}`,
         name: subName,
         parentGenre: genreName,
-        trackCount: count,
-        distance: baseDistance,
-        angle: subAngle,
-        x: center.x + Math.cos(subAngle) * baseDistance,
-        y: center.y + Math.sin(subAngle) * baseDistance,
-        tier,
+        trackCount: sCount,
+        distance,
+        angle,
+        x: center.x + Math.cos(angle) * distance,
+        y: center.y + Math.sin(angle) * distance,
+        tier: isPlanet ? 'planet' : 'moon',
         celestialColor: center.celestialColor,
       });
     });
@@ -185,164 +221,140 @@ export function buildCelestialUniverse(records: RawTrackRecord[], _isDark: boole
       x: center.x,
       y: center.y,
       radius: center.radius,
+      activityLevel: center.activityLevel,
+      brightness: center.brightness,
       subgenres,
-      artists: [], // filled in next step
+      artists: [],
     });
   });
 
-  // 4. Build Artists (smaller stars) and position them in their genre systems or as bridges
+  // 4. Position Artists (Stars)
   const universeArtists: UniverseArtist[] = [];
-  const bridgeList: Array<{ artist: UniverseArtist; genreA: string; genreB: string }> = [];
   const allTracksList: UniverseTrack[] = [];
+  const bridgeList: Array<{ artist: UniverseArtist; genreA: string; genreB: string }> = [];
 
-  // Map to hold artists grouped per primary genre
-  const artistsByGenre = new Map<string, UniverseArtist[]>();
-  genreSystems.forEach((g) => artistsByGenre.set(g.name, []));
+  const currentlyPlayingArtistLower = (playbackState?.isPlaying && playbackState.artistName)
+    ? playbackState.artistName.toLowerCase()
+    : null;
+  const currentlyPlayingTrackLower = (playbackState?.isPlaying && playbackState.trackTitle)
+    ? playbackState.trackTitle.toLowerCase()
+    : null;
 
-  artistRecords.forEach((tracks, artistName) => {
-    // Primary genre is the one with the most tracks by this artist
-    const genreTallies: Record<string, number> = {};
-    tracks.forEach((t) => {
-      genreTallies[t.genre] = (genreTallies[t.genre] || 0) + 1;
-    });
+  artistRecords.forEach((aTracks, artistName) => {
+    const genres = Array.from(artistGenres.get(artistName) || []);
+    const primaryGenre = genres[0] || 'Electronic';
+    const secondaryGenres = genres.slice(1);
 
-    const sortedArtistGenres = Object.entries(genreTallies).sort((a, b) => b[1] - a[1]);
-    const primaryGenre = sortedArtistGenres[0]?.[0] || 'Electronic';
-    const secondaryGenres = sortedArtistGenres.slice(1).map(([g]) => g);
+    const isBridge = genres.length >= 2;
+    const parentSystem = genreCenterMap.get(primaryGenre) || genreCenterMap.get(genreSystems[0].name)!;
 
-    // Star radius based on track count (14px to 28px)
-    const starRadius = Math.min(30, Math.max(12, 10 + Math.sqrt(tracks.length) * 5.2));
+    const trackCount = aTracks.length;
+    const artistRadius = Math.min(18, Math.max(8.5, 7 + Math.sqrt(trackCount) * 2.8));
 
-    // Check if artist is a bridge between two genres
-    const isBridge = secondaryGenres.length > 0;
-    const bridgeGenre = isBridge ? secondaryGenres[0] : undefined;
+    let ax: number;
+    let ay: number;
+    let bridgeGenre: string | undefined;
 
-    // Celestial coordinates:
-    const gCenter = genreCenterMap.get(primaryGenre) || { 
-      x: 0, 
-      y: 0, 
-      radius: 40, 
-      color: '#42C2F4', 
-      celestialColor: getCelestialGenreColor(primaryGenre) 
-    };
-
-    let artistX = gCenter.x;
-    let artistY = gCenter.y;
-
-    if (isBridge && bridgeGenre && genreCenterMap.has(bridgeGenre)) {
-      // Bridge Artist: placed in the gravitational saddle between the two genre suns!
-      const g2Center = genreCenterMap.get(bridgeGenre)!;
-      const midRatio = 0.5 + (Math.sin(artistName.length * 1.7) * 0.12);
-      artistX = gCenter.x + (g2Center.x - gCenter.x) * midRatio;
-      artistY = gCenter.y + (g2Center.y - gCenter.y) * midRatio;
+    if (isBridge && genreCenterMap.has(genres[1])) {
+      const gB = genreCenterMap.get(genres[1])!;
+      bridgeGenre = genres[1];
+      const saddleT = 0.5 + 0.15 * Math.sin(artistName.length);
+      ax = parentSystem.x + (gB.x - parentSystem.x) * saddleT + Math.sin(artistName.length * 2.1) * 35;
+      ay = parentSystem.y + (gB.y - parentSystem.y) * saddleT + Math.cos(artistName.length * 2.1) * 35;
     } else {
-      // Orbiting around primary genre sun
-      const existingInGenre = artistsByGenre.get(primaryGenre)?.length || 0;
-      const orbitRing = Math.floor(existingInGenre / 5);
-      const ringIdx = existingInGenre % 5;
-      const orbitDist = gCenter.radius + 150 + orbitRing * 90 + (existingInGenre % 2 === 0 ? 18 : -18);
-      const artAngle = (ringIdx / 5) * Math.PI * 2 + (existingInGenre * 0.35);
-
-      artistX = gCenter.x + Math.cos(artAngle) * orbitDist;
-      artistY = gCenter.y + Math.sin(artAngle) * orbitDist;
+      const hash = idxGenre(artistName);
+      const angle = (hash / 100) * Math.PI * 2;
+      const orbitOffset = parentSystem.radius + 85 + (hash % 120);
+      ax = parentSystem.x + Math.cos(angle) * orbitOffset;
+      ay = parentSystem.y + Math.sin(angle) * orbitOffset;
     }
 
-    // Build orbiting tracks for this artist
-    const universeTracks: UniverseTrack[] = [];
-    const numTracks = tracks.length;
+    const isCurrentlyPlaying = currentlyPlayingArtistLower ? artistName.toLowerCase() === currentlyPlayingArtistLower : false;
 
-    tracks.forEach((t, tIdx) => {
-      // Orbit radius around artist star: 35px to 80px
-      const orbitDist = 32 + (tIdx % 3) * 16 + Math.floor(tIdx / 3) * 18;
-      const initialAngle = (tIdx / Math.max(1, numTracks)) * Math.PI * 2;
-      const orbitSpeed = 0.0004 + (0.0003 / (1 + (tIdx % 3))); // subtle gentle cosmic drift
+    // Artists tracks as satellites
+    const artistTracks: UniverseTrack[] = aTracks.map((t, tIdx) => {
+      const orbitRadius = artistRadius + 14 + tIdx * 9.5;
+      const orbitAngle = (tIdx / Math.max(1, aTracks.length)) * Math.PI * 2 + 0.5;
+      const orbitSpeed = 0.0004 + (tIdx % 3) * 0.0002;
+      const tx = ax + Math.cos(orbitAngle) * orbitRadius;
+      const ty = ay + Math.sin(orbitAngle) * orbitRadius;
+
+      const isTrackPlaying = isCurrentlyPlaying && currentlyPlayingTrackLower
+        ? t.track.toLowerCase().includes(currentlyPlayingTrackLower) || currentlyPlayingTrackLower.includes(t.track.toLowerCase())
+        : false;
 
       const trackObj: UniverseTrack = {
-        id: `track-${artistName}-${t.track}-${tIdx}`.replace(/\s+/g, '-'),
+        id: `track-${t.track.toLowerCase().replace(/[^a-z0-9]/g, '-')}-${tIdx}`,
         title: t.track,
-        artist: artistName,
+        artist: t.artist,
         genre: t.genre,
         subgenre: t.subgenre,
         bpm: t.bpm,
-        album: t.album || 'Single',
-        year: t.year || 2024,
-        duration: t.duration || '4:15',
-        spotifyUrl: t.spotifyUrl || `https://open.spotify.com/search/${encodeURIComponent(`${artistName} ${t.track}`)}`,
-        orbitRadius: orbitDist,
-        orbitAngle: initialAngle,
+        duration: t.duration,
+        album: t.album,
+        year: t.year,
+        orbitRadius,
+        orbitAngle,
         orbitSpeed,
-        x: artistX + Math.cos(initialAngle) * orbitDist,
-        y: artistY + Math.sin(initialAngle) * orbitDist,
-        celestialColor: gCenter.celestialColor,
+        x: tx,
+        y: ty,
+        spotifyUrl: t.spotifyUrl,
+        celestialColor: parentSystem.celestialColor,
+        isCurrentlyPlaying: isTrackPlaying,
       };
 
-      universeTracks.push(trackObj);
       allTracksList.push(trackObj);
+      return trackObj;
     });
 
-    const uniArtist: UniverseArtist = {
-      id: `artist-${artistName}`.replace(/\s+/g, '-'),
+    const artistObj: UniverseArtist = {
+      id: `artist-${artistName.toLowerCase().replace(/[^a-z0-9]/g, '-')}`,
       name: artistName,
       primaryGenre,
       secondaryGenres,
-      trackCount: tracks.length,
-      x: artistX,
-      y: artistY,
-      radius: starRadius,
-      tracks: universeTracks,
+      trackCount,
+      x: ax,
+      y: ay,
+      radius: artistRadius,
+      tracks: artistTracks,
       bridgeGenre,
-      celestialColor: gCenter.celestialColor,
+      celestialColor: parentSystem.celestialColor,
+      isCurrentlyPlaying,
     };
 
-    universeArtists.push(uniArtist);
-    if (artistsByGenre.has(primaryGenre)) {
-      artistsByGenre.get(primaryGenre)!.push(uniArtist);
-    }
+    universeArtists.push(artistObj);
 
     if (isBridge && bridgeGenre) {
-      bridgeList.push({ artist: uniArtist, genreA: primaryGenre, genreB: bridgeGenre });
+      bridgeList.push({ artist: artistObj, genreA: primaryGenre, genreB: bridgeGenre });
     }
+
+    const gSys = genreSystems.find((g) => g.name === primaryGenre);
+    if (gSys) gSys.artists.push(artistObj);
   });
 
-  // Assign artists to their genre systems
-  genreSystems.forEach((g) => {
-    g.artists = artistsByGenre.get(g.name) || [];
-  });
-
-  // 5. Build Celestial Discovery Systems (Unexplored Music Systems in Universe)
-  const discoveriesList = generateDiscoveryRecommendations(records);
+  // 5. Generate Discovery Systems (Stellar Nurseries in Deep Space)
+  const discoveries = generateDiscoveryRecommendations(records, 'all', tasteProfile);
   const celestialDiscoveries: CelestialDiscoverySystem[] = [];
 
-  discoveriesList.forEach((rec, dIdx) => {
-    // Find closest anchor genre or fallback to primary system
-    let anchor = genreSystems.find((g) => g.name === rec.genre);
+  discoveries.forEach((rec, dIdx) => {
+    let anchor = genreSystems.find((g) => g.name.toLowerCase() === rec.genre.toLowerCase());
     if (!anchor) {
-      anchor = genreSystems[0] || { x: 0, y: 0, radius: 40, color: '#C9B5DC', name: 'Electronic' };
+      anchor = genreSystems[dIdx % genreSystems.length];
     }
+    if (!anchor) return;
 
-    // Distance based on similarity score & category:
-    // Nearby (Taste Match ~82-95%): Closer orbit (320px - 440px from genre sun)
-    // Adjacent (Taste Match ~65-81%): Medium orbit (540px - 720px from genre sun)
-    // Unknown (Taste Match < 65%): Distant galactic frontier (880px - 1100px)
-    let orbitDistance = 420;
-    if (rec.category === 'nearby') {
-      orbitDistance = anchor.radius + 280 + (dIdx % 2) * 50;
-    } else if (rec.category === 'adjacent') {
-      orbitDistance = anchor.radius + 560 + (dIdx % 2) * 70;
-    } else {
-      orbitDistance = galacticBaseRadius + 420 + dIdx * 90;
-    }
+    const baseDistance = anchor.radius + 260;
+    const distanceFactor = rec.category === 'nearby' ? 1.0 : rec.category === 'adjacent' ? 1.6 : 2.3;
+    const orbitDistance = baseDistance * distanceFactor;
 
-    const orbitAngle = (dIdx / Math.max(1, discoveriesList.length)) * Math.PI * 2 + 0.45;
+    const hash = idxGenre(rec.artist);
+    const orbitAngle = (hash / 100) * Math.PI * 2;
+
     const dx = anchor.x + Math.cos(orbitAngle) * orbitDistance;
     const dy = anchor.y + Math.sin(orbitAngle) * orbitDistance;
 
     const discCelestialColor = getCelestialGenreColor(rec.genre);
-    const discColor = rec.category === 'nearby' 
-      ? '#E0C870' // Warm discovery gold for close match
-      : rec.category === 'adjacent'
-      ? '#9FB8E8' // Cyan-tinted periwinkle
-      : '#C49EE6'; // Deep nebula violet for unknown
+    const discColor = discCelestialColor.primary;
 
     celestialDiscoveries.push({
       id: rec.id,
@@ -362,16 +374,11 @@ export function buildCelestialUniverse(records: RawTrackRecord[], _isDark: boole
     });
   });
 
-  // 6. Build Functional Asteroids (Music Discovery & Density Objects)
-  // Asteroids represent:
-  // - Peripheral / obscure artists (track count = 1 or niche)
-  // - High-density subgenre asteroid belts around genre systems
-  // - Cross-genre bridges in the gravitational void between systems
+  // 6. Build Functional Asteroids (Music Density & Peripheral Relationships)
   const asteroidsList: UniverseAsteroid[] = [];
 
-  // Helper to generate irregular, faceted celestial silhouette vertices
   const createAsteroidVertices = (baseR: number, seed: number) => {
-    const numPoints = 6 + (seed % 3); // 6 to 8 facets
+    const numPoints = 6 + (seed % 3);
     const verts: Array<{ x: number; y: number }> = [];
     for (let i = 0; i < numPoints; i++) {
       const a = (i / numPoints) * Math.PI * 2;
@@ -386,13 +393,11 @@ export function buildCelestialUniverse(records: RawTrackRecord[], _isDark: boole
 
   // 6A. Asteroid Belts around Major Genre Systems based on Music Density
   genreSystems.forEach((gSystem, gIdx) => {
-    // Number of density asteroids proportional to genre presence
     const densityCount = Math.min(22, Math.max(6, Math.floor(gSystem.trackCount * 1.4)));
     const celestialCol = gSystem.celestialColor || getCelestialGenreColor(gSystem.name);
 
     for (let i = 0; i < densityCount; i++) {
       const seed = gIdx * 37 + i * 19;
-      // Orbit in a belt outside the core: belt radius ~ radius * 1.6 to 2.8
       const beltDist = gSystem.radius * (1.65 + 0.9 * ((seed % 100) / 100));
       const orbitAngle = ((i / densityCount) * Math.PI * 2) + ((seed % 50) / 50) * 0.4;
       const orbitSpeed = (0.0003 + (seed % 5) * 0.0001) * (i % 2 === 0 ? 1 : -1);
@@ -400,7 +405,6 @@ export function buildCelestialUniverse(records: RawTrackRecord[], _isDark: boole
       const ax = gSystem.x + Math.cos(orbitAngle) * beltDist;
       const ay = gSystem.y + Math.sin(orbitAngle) * beltDist;
 
-      // Niche artist or peripheral subgenre representation
       const sub = gSystem.subgenres[i % Math.max(1, gSystem.subgenres.length)];
       const relatedTracks = gTracksByGenre(records, gSystem.name);
       const sampleTrack = relatedTracks[i % Math.max(1, relatedTracks.length)];
@@ -411,7 +415,7 @@ export function buildCelestialUniverse(records: RawTrackRecord[], _isDark: boole
 
       asteroidsList.push({
         id: `asteroid-belt-${gSystem.name}-${i}`,
-        name: sampleTrack ? `${sampleTrack.track}` : `${gSystem.name} Fragment ${i + 1}`,
+        name: sampleTrack ? `${sampleTrack.track}` : `${gSystem.name} Peripheral ${i + 1}`,
         type: isLarge ? 'obscure_artist' : isMedium ? 'niche_subgenre' : 'peripheral_track',
         parentGenre: gSystem.name,
         artist: sampleTrack?.artist || undefined,
@@ -419,7 +423,7 @@ export function buildCelestialUniverse(records: RawTrackRecord[], _isDark: boole
         bpm: sampleTrack?.bpm || null,
         reasons: [
           `Atmospheric density object orbiting ${gSystem.name}`,
-          sub ? `Belongs to subgenre current: ${sub.name}` : `Peripheral music fragment`,
+          sub ? `Subgenre current: ${sub.name}` : `Peripheral library track`,
         ],
         sampleTracks: sampleTrack ? [{ title: sampleTrack.track, album: sampleTrack.album, year: sampleTrack.year }] : undefined,
         x: ax,
@@ -448,127 +452,86 @@ export function buildCelestialUniverse(records: RawTrackRecord[], _isDark: boole
 
     for (let k = 0; k < count; k++) {
       const tRatio = 0.25 + k * 0.25;
-      const seed = bIdx * 53 + k * 29;
-      const bx = gA.x + (gB.x - gA.x) * tRatio + (Math.sin(seed) * 35);
-      const by = gA.y + (gB.y - gA.y) * tRatio + (Math.cos(seed) * 35);
-      const astRad = 5.0;
+      const bx = gA.x + (gB.x - gA.x) * tRatio + Math.sin(bIdx * 3 + k) * 35;
+      const by = gA.y + (gB.y - gA.y) * tRatio + Math.cos(bIdx * 3 + k) * 35;
+      const astRad = 4.2;
 
       asteroidsList.push({
         id: `asteroid-bridge-${bridge.artist.name}-${k}`,
-        name: `${bridge.artist.name} Resonance`,
+        name: `${bridge.artist.name} Bridge Object ${k + 1}`,
         type: 'cross_genre',
         parentGenre: bridge.genreA,
         relatedGenre: bridge.genreB,
         artist: bridge.artist.name,
-        trackCount: bridge.artist.trackCount,
+        trackCount: 1,
         reasons: [
-          `Cross-genre gravitational node bridging ${bridge.genreA} and ${bridge.genreB}`,
-          `Anchored by mutual influences of ${bridge.artist.name}`,
+          `Gravitational saddle between ${bridge.genreA} and ${bridge.genreB}`,
+          `Anchored by cross-genre artist ${bridge.artist.name}`,
         ],
-        sampleTracks: bridge.artist.tracks.slice(0, 2).map((t) => ({ title: t.title, album: t.album, year: t.year })),
+        sampleTracks: bridge.artist.tracks.map((t) => ({ title: t.title, album: t.album, year: t.year })),
         x: bx,
         y: by,
         baseX: bx,
         baseY: by,
-        orbitRadius: 25,
-        orbitAngle: (k / count) * Math.PI * 2,
-        orbitSpeed: 0.0005,
+        orbitRadius: 20,
+        orbitAngle: k * 1.5,
+        orbitSpeed: 0.0002,
         radius: astRad,
-        vertices: createAsteroidVertices(astRad, seed),
+        vertices: createAsteroidVertices(astRad, bIdx * 20 + k),
         color: bridgeCol.primary,
         celestialColor: bridgeCol,
       });
     }
   });
 
-  // 7. Build Dynamic Meteors (Active Events moving through Universe)
-  // Meteors have defined data-driven trajectories:
-  // - Recommendation candidates arriving from deep space into genre systems
-  // - Cross-genre bridges traveling between Genre A and Genre B
-  // - Recently played tracks traveling toward their home stellar system
+  // 7. Data-Driven Meteors (Genuine Active Data Events)
   const meteorsList: UniverseMeteor[] = [];
   const now = Date.now();
 
-  // 7A. Cross-Genre Meteors (Traveling along gravitational paths between related genres)
-  bridgeList.slice(0, 4).forEach((bridge, mIdx) => {
-    const gA = genreSystems.find((g) => g.name === bridge.genreA);
-    const gB = genreSystems.find((g) => g.name === bridge.genreB);
-    if (!gA || !gB) return;
+  // 7A. Real Listening Events as Active Meteors
+  if (listeningEvents && listeningEvents.length > 0) {
+    listeningEvents.slice(0, 4).forEach((evt, eIdx) => {
+      const targetG = genreSystems.find((g) => g.name.toLowerCase() === evt.genre.toLowerCase()) || genreSystems[0];
+      if (targetG) {
+        const col = getCelestialGenreColor(evt.genre);
+        const angle = (eIdx * 1.4) + 0.5;
+        const startX = targetG.x + Math.cos(angle) * 580;
+        const startY = targetG.y + Math.sin(angle) * 580;
 
-    const bridgeCol = bridge.artist.celestialColor || getCelestialGenreColor(bridge.genreA);
-    const track = bridge.artist.tracks[0];
-
-    meteorsList.push({
-      id: `meteor-bridge-${bridge.artist.name}-${mIdx}`,
-      title: track ? track.title : bridge.artist.name,
-      artist: bridge.artist.name,
-      genre: bridge.genreA,
-      subgenre: bridge.genreB,
-      eventType: 'cross_genre_link',
-      reason: `Traveling bridge: connects ${bridge.genreA} ↔ ${bridge.genreB}`,
-      sourceGenre: bridge.genreA,
-      targetGenre: bridge.genreB,
-      startX: gA.x,
-      startY: gA.y,
-      targetX: gB.x,
-      targetY: gB.y,
-      currentX: gA.x,
-      currentY: gA.y,
-      speed: 0.0016 + (mIdx % 2) * 0.0004,
-      progress: (mIdx * 0.33) % 1.0, // staggered travel progress
-      trailLength: 28,
-      history: [],
-      color: bridgeCol.primary,
-      celestialColor: bridgeCol,
-      createdAt: now - mIdx * 120000,
+        meteorsList.push({
+          id: `meteor-live-evt-${evt.id}`,
+          title: evt.trackTitle,
+          artist: evt.artistName,
+          genre: evt.genre,
+          subgenre: evt.subgenre,
+          eventType: 'recently_played',
+          reason: `Active listening event: entered your ${evt.genre} stellar system`,
+          sourceGenre: 'Listening Stream',
+          targetGenre: targetG.name,
+          startX,
+          startY,
+          targetX: targetG.x,
+          targetY: targetG.y,
+          currentX: startX,
+          currentY: startY,
+          speed: 0.0022 + eIdx * 0.0003,
+          progress: (0.2 + eIdx * 0.25) % 1.0,
+          trailLength: 28,
+          history: [],
+          color: col.primary,
+          celestialColor: col,
+          createdAt: new Date(evt.playedAt).getTime() || now,
+        });
+      }
     });
-  });
-
-  // 7B. Incoming Recommendation Meteors (Moving from deep space toward discovery position)
-  celestialDiscoveries.slice(0, 3).forEach((disc, dIdx) => {
-    const discCol = disc.celestialColor || getCelestialGenreColor(disc.recommendation.genre);
-    const angleFromFar = disc.orbitAngle + 0.8;
-    const farDistance = 1400; // Far in uncharted deep space
-    const startX = disc.x + Math.cos(angleFromFar) * farDistance;
-    const startY = disc.y + Math.sin(angleFromFar) * farDistance;
-
-    const sampleT = disc.recommendation.sampleTracks[0];
-
-    meteorsList.push({
-      id: `meteor-discovery-${disc.id}`,
-      title: sampleT ? sampleT.title : disc.recommendation.artist,
-      artist: disc.recommendation.artist,
-      genre: disc.recommendation.genre,
-      subgenre: disc.recommendation.subgenre,
-      eventType: 'new_discovery',
-      reason: `New candidate entering universe based on your ${disc.recommendation.genre} listening (${Math.round(disc.recommendation.score * 100)}% Match)`,
-      sourceGenre: 'Deep Space',
-      targetGenre: disc.anchorGenre,
-      startX,
-      startY,
-      targetX: disc.x,
-      targetY: disc.y,
-      currentX: startX,
-      currentY: startY,
-      speed: 0.0012 + dIdx * 0.0003,
-      progress: (0.15 + dIdx * 0.28) % 1.0,
-      trailLength: 32,
-      history: [],
-      color: discCol.primary,
-      celestialColor: discCol,
-      createdAt: now - dIdx * 250000,
-    });
-  });
-
-  // 7C. Recently Played Track Meteor (Entering its home system)
-  if (records.length > 0) {
+  } else if (records.length > 0) {
+    // Fallback: 1 recent track from records
     const recentRec = records[0];
     const targetG = genreSystems.find((g) => g.name === recentRec.genre) || genreSystems[0];
     if (targetG) {
       const recentCol = getCelestialGenreColor(recentRec.genre);
-      const offsetAngle = 1.2;
-      const startX = targetG.x + Math.cos(offsetAngle) * 550;
-      const startY = targetG.y + Math.sin(offsetAngle) * 550;
+      const startX = targetG.x + Math.cos(1.2) * 520;
+      const startY = targetG.y + Math.sin(1.2) * 520;
 
       meteorsList.push({
         id: `meteor-recent-${recentRec.track}`,
@@ -592,7 +555,77 @@ export function buildCelestialUniverse(records: RawTrackRecord[], _isDark: boole
         history: [],
         color: recentCol.primary,
         celestialColor: recentCol,
-        createdAt: now - 360000,
+        createdAt: now - 180000,
+      });
+    }
+  }
+
+  // 7B. Incoming Recommendation Meteors (From deep space toward discovery position)
+  celestialDiscoveries.slice(0, 2).forEach((disc, dIdx) => {
+    const discCol = disc.celestialColor || getCelestialGenreColor(disc.recommendation.genre);
+    const angleFromFar = disc.orbitAngle + 0.8;
+    const farDistance = 1200;
+    const startX = disc.x + Math.cos(angleFromFar) * farDistance;
+    const startY = disc.y + Math.sin(angleFromFar) * farDistance;
+
+    const sampleT = disc.recommendation.sampleTracks[0];
+
+    meteorsList.push({
+      id: `meteor-discovery-${disc.id}`,
+      title: sampleT ? sampleT.title : disc.recommendation.artist,
+      artist: disc.recommendation.artist,
+      genre: disc.recommendation.genre,
+      subgenre: disc.recommendation.subgenre,
+      eventType: 'new_discovery',
+      reason: `New candidate entering universe based on your ${disc.recommendation.genre} listening (${Math.round(disc.recommendation.score * 100)}% Match)`,
+      sourceGenre: 'Deep Space',
+      targetGenre: disc.anchorGenre,
+      startX,
+      startY,
+      targetX: disc.x,
+      targetY: disc.y,
+      currentX: startX,
+      currentY: startY,
+      speed: 0.0014 + dIdx * 0.0003,
+      progress: (0.15 + dIdx * 0.35) % 1.0,
+      trailLength: 30,
+      history: [],
+      color: discCol.primary,
+      celestialColor: discCol,
+      createdAt: now - dIdx * 200000,
+    });
+  });
+
+  // 7C. Cross-genre bridge meteor
+  if (bridgeList.length > 0) {
+    const bridge = bridgeList[0];
+    const gA = genreSystems.find((g) => g.name === bridge.genreA);
+    const gB = genreSystems.find((g) => g.name === bridge.genreB);
+    if (gA && gB) {
+      const bridgeCol = bridge.artist.celestialColor || getCelestialGenreColor(bridge.genreA);
+      meteorsList.push({
+        id: `meteor-bridge-${bridge.artist.name}`,
+        title: bridge.artist.tracks[0]?.title || bridge.artist.name,
+        artist: bridge.artist.name,
+        genre: bridge.genreA,
+        subgenre: bridge.genreB,
+        eventType: 'cross_genre_link',
+        reason: `Traveling bridge: connects ${bridge.genreA} ↔ ${bridge.genreB}`,
+        sourceGenre: bridge.genreA,
+        targetGenre: bridge.genreB,
+        startX: gA.x,
+        startY: gA.y,
+        targetX: gB.x,
+        targetY: gB.y,
+        currentX: gA.x,
+        currentY: gA.y,
+        speed: 0.0018,
+        progress: 0.65,
+        trailLength: 26,
+        history: [],
+        color: bridgeCol.primary,
+        celestialColor: bridgeCol,
+        createdAt: now - 120000,
       });
     }
   }

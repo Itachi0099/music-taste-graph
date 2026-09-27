@@ -45,7 +45,11 @@ The system incorporates **functional celestial bodies**:
 - **Local CSV Import:** Drag-and-drop your own music metadata exports.
 
 ### 🔍 Discovery Engine & Contextual Inspection
-- Recommends nearby, adjacent, and exploratory music based on multidimensional audio attributes (BPM, genre affinity, mood).
+- Recommends nearby, adjacent, and exploratory music based on user taste signals, genre relationships, artist similarity, and listening history.
+- Structured discovery tiers:
+  - **Nearby:** Strong similarity to existing dominant taste.
+  - **Adjacent:** Connected to current taste while introducing an adjacent sonic bridge.
+  - **Unknown:** Distant exploratory frontier outside dominant orbits.
 - Inspectable reasons ("Why this matches your taste") with direct sample tracks and one-click collection actions.
 
 ---

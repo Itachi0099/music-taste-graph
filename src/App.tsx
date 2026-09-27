@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useMemo } from 'react';
+import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { TopNavigation } from './components/TopNavigation';
 import { DetailsDrawer } from './components/DetailsDrawer';
 import { RecommendationsDrawer } from './components/RecommendationsDrawer';
@@ -19,9 +19,23 @@ import { buildGraphFromRecords } from './utils/graphBuilder';
 import { getLayoutedElements } from './utils/layoutEngine';
 import { buildCelestialUniverse } from './utils/universeBuilder';
 import { computeAnalytics } from './utils/analytics';
-import { generateRecommendations } from './utils/recommendationEngine';
-import { getSpotifyToken, fetchSpotifyTopTracks } from './utils/spotify';
-import type { RawTrackRecord, TasteSummary, RecommendationItem, DiscoveryCategory } from './types';
+import { generateDiscoveryRecommendations } from './utils/discoveryEngine';
+import { 
+  getSpotifyToken, 
+  fetchSpotifyTopTracks, 
+  fetchCurrentlyPlaying, 
+  fetchRecentlyPlayedEvents 
+} from './utils/spotify';
+import { normalizeMusicRecords, ingestListeningEvents } from './utils/normalizer';
+import type { 
+  RawTrackRecord, 
+  TasteSummary, 
+  RecommendationItem, 
+  DiscoveryCategory, 
+  ListeningEvent, 
+  SpotifyPlaybackState,
+  SpotifyStatusInfo,
+} from './types';
 import { SlidersHorizontal, Orbit, Network } from 'lucide-react';
 
 function App() {
@@ -30,6 +44,17 @@ function App() {
   const [edges, setEdges] = useState<Edge[]>([]);
   const [preset, setPreset] = useState<string>('electronic');
   
+  // Normalized Listening Events & Playback State
+  const [listeningEvents, setListeningEvents] = useState<ListeningEvent[]>([]);
+  const [playbackState, setPlaybackState] = useState<SpotifyPlaybackState | null>(null);
+  const [spotifyStatus, setSpotifyStatus] = useState<SpotifyStatusInfo>({
+    state: 'disconnected',
+    lastSyncAt: null,
+    label: 'Spotify · Offline',
+  });
+  const [isRefreshingSpotify, setIsRefreshingSpotify] = useState<boolean>(false);
+  const lastSyncAtRef = useRef<number>(0);
+
   // Navigation & Progressive disclosure states
   const [viewFilter, setViewFilter] = useState<'all' | 'genres' | 'artists' | 'tracks'>('all');
   const [expandedGenreIds, setExpandedGenreIds] = useState<Set<string>>(new Set());
@@ -51,6 +76,7 @@ function App() {
   const [maxBpm, setMaxBpm] = useState<number>(200);
   const [summary, setSummary] = useState<TasteSummary | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  
   // Visual Mode: 'universe' (Personal Celestial Universe) vs 'graph' (Classic Graph)
   const [visualMode, setVisualMode] = useState<'universe' | 'graph'>('universe');
   const [universeSelection, setUniverseSelection] = useState<UniverseSelection>(null);
@@ -77,7 +103,7 @@ function App() {
 
   const toggleTheme = () => setIsDark((prev) => !prev);
 
-  // Compute analytics & filtered records
+  // Filter records
   const filteredRecords = useMemo(() => {
     return records.filter((r) => {
       if (selectedGenreFilter !== 'all' && r.genre.toLowerCase() !== selectedGenreFilter.toLowerCase()) {
@@ -113,10 +139,10 @@ function App() {
     setEdges(layoutedEdges);
   }, [filteredRecords, viewFilter, expandedGenreIds, expandedArtistIds]);
 
-  // Compute Celestial Universe model from current filtered music records
+  // Compute Celestial Universe model with live listening events and playback
   const celestialUniverse = useMemo(() => {
-    return buildCelestialUniverse(filteredRecords, isDark);
-  }, [filteredRecords, isDark]);
+    return buildCelestialUniverse(filteredRecords, isDark, listeningEvents, playbackState);
+  }, [filteredRecords, isDark, listeningEvents, playbackState]);
 
   // Handle progressive disclosure clicks
   const handleToggleExpand = (node: Node) => {
@@ -138,9 +164,20 @@ function App() {
   };
 
   // Recommendations
-  const recommendations = useMemo(() => {
-    return generateRecommendations(records, selectedMoodFilter);
-  }, [records, selectedMoodFilter]);
+  const recommendations = useMemo<RecommendationItem[]>(() => {
+    const rawDisc = generateDiscoveryRecommendations(records, 'all', summary?.tasteProfile);
+    return rawDisc.map((d) => ({
+      id: d.id,
+      type: 'artist',
+      title: d.artist,
+      subtitle: d.genre + (d.subgenre ? ` · ${d.subgenre}` : ''),
+      genre: d.genre,
+      bpm: d.bpm,
+      mood: 'Harmonic',
+      matchScore: Math.round(d.score * 100),
+      reason: d.reasons[0] || 'Matches your taste profile',
+    }));
+  }, [records, summary]);
 
   const availableMoods = useMemo(() => {
     if (!summary?.moodBreakdown) return [];
@@ -159,43 +196,146 @@ function App() {
     else if (newPreset === 'eclectic') setRecords(eclecticData);
   };
 
-  // Spotify auth
+  // Reconcile Spotify events incrementally
+  const reconcileSpotifyData = useCallback(async (token: string) => {
+    try {
+      // 1. Fetch currently playing
+      const current = await fetchCurrentlyPlaying(token);
+      if (current) {
+        setPlaybackState(current);
+      }
+
+      // 2. Fetch recently played events incrementally
+      const afterTs = lastSyncAtRef.current > 0 ? lastSyncAtRef.current : undefined;
+      const recentEvents = await fetchRecentlyPlayedEvents(token, afterTs);
+
+      if (recentEvents.length > 0) {
+        const now = Date.now();
+        lastSyncAtRef.current = now;
+
+        setListeningEvents((prev) => {
+          const currentDb = normalizeMusicRecords(records, 'spotify');
+          const { db, addedEvents } = ingestListeningEvents({ ...currentDb, listeningEvents: prev }, recentEvents);
+          if (addedEvents.length > 0) {
+            setRecords(db.rawRecords);
+          }
+          return db.listeningEvents;
+        });
+      }
+
+      setSpotifyStatus({
+        state: current?.isPlaying ? 'live' : 'updated_recently',
+        lastSyncAt: Date.now(),
+        label: current?.isPlaying ? 'Spotify · Live' : 'Spotify · Synced',
+      });
+    } catch (err) {
+      console.warn('Spotify reconcile error (keeping local universe intact):', err);
+    }
+  }, [records]);
+
+  // Manual refresh Spotify trigger
+  const handleManualSpotifyRefresh = async () => {
+    setIsRefreshingSpotify(true);
+    try {
+      const token = await getSpotifyToken();
+      if (token) {
+        await reconcileSpotifyData(token);
+      }
+    } finally {
+      setIsRefreshingSpotify(false);
+    }
+  };
+
+  // Automatic Spotify session restoration & continuous polling loop
   useEffect(() => {
     let isCancelled = false;
+    let pollInterval: NodeJS.Timeout | null = null;
 
     getSpotifyToken()
-      .then((token) => {
-        if (token && !isCancelled) {
-          setPreset('spotify');
-          fetchSpotifyTopTracks(token)
-            .then((fetchedRecords) => {
-              if (!isCancelled && fetchedRecords && fetchedRecords.length > 0) {
-                setRecords(fetchedRecords);
-              }
-            })
-            .catch((err) => {
-              console.warn('Spotify fetch error, falling back to preset:', err);
-              if (!isCancelled) {
-                // Keep default electronic data if fetch failed so the app never shows a blank screen
-                setPreset('electronic');
-              }
-            });
+      .then(async (token) => {
+        if (!token || isCancelled) return;
+
+        setSpotifyStatus({
+          state: 'connecting',
+          lastSyncAt: null,
+          label: 'Spotify · Connecting',
+        });
+
+        setPreset('spotify');
+
+        // Initial fetch of library
+        try {
+          const fetchedRecords = await fetchSpotifyTopTracks(token);
+          if (!isCancelled && fetchedRecords && fetchedRecords.length > 0) {
+            const db = normalizeMusicRecords(fetchedRecords, 'spotify');
+            setRecords(db.rawRecords);
+          }
+        } catch (err) {
+          console.warn('Spotify initial top tracks fetch error, keeping current preset:', err);
         }
+
+        // Reconcile current playback and recently played
+        if (!isCancelled) {
+          await reconcileSpotifyData(token);
+        }
+
+        // Setup background polling (every 20s while tab is visible)
+        const setupPolling = () => {
+          if (pollInterval) clearInterval(pollInterval);
+          if (document.hidden) return; // Pause when hidden
+
+          pollInterval = setInterval(async () => {
+            if (!document.hidden && !isCancelled) {
+              const activeToken = await getSpotifyToken();
+              if (activeToken) {
+                await reconcileSpotifyData(activeToken);
+              }
+            }
+          }, 20000);
+        };
+
+        setupPolling();
+
+        // Page Visibility API handler
+        const handleVisibilityChange = async () => {
+          if (document.hidden) {
+            if (pollInterval) clearInterval(pollInterval);
+          } else {
+            // User returned to tab: immediately reconcile
+            const activeToken = await getSpotifyToken();
+            if (activeToken) {
+              await reconcileSpotifyData(activeToken);
+            }
+            setupPolling();
+          }
+        };
+
+        document.addEventListener('visibilitychange', handleVisibilityChange);
+
+        return () => {
+          document.removeEventListener('visibilitychange', handleVisibilityChange);
+        };
       })
       .catch((err) => {
-        console.warn('Spotify token error, continuing with default library:', err);
+        console.warn('Spotify session error, continuing with cached universe:', err);
+        setSpotifyStatus({
+          state: 'disconnected',
+          lastSyncAt: null,
+          label: 'Spotify · Offline',
+        });
       });
 
     return () => {
       isCancelled = true;
+      if (pollInterval) clearInterval(pollInterval);
     };
-  }, []);
+  }, [reconcileSpotifyData]);
 
   // Add discovery item into graph
   const handleAddRecommendation = (item: RecommendationItem) => {
     const newRecord: RawTrackRecord = {
       track: item.title,
-      artist: item.subtitle,
+      artist: item.subtitle.split(' · ')[0] || item.subtitle,
       genre: item.genre,
       bpm: item.bpm,
       mood: item.mood,
@@ -204,7 +344,7 @@ function App() {
     setRecords([newRecord, ...records]);
   };
 
-  // Import files
+  // Import files into common normalization pipeline
   const handleImport = () => {
     fileInputRef.current?.click();
   };
@@ -219,14 +359,15 @@ function App() {
         dynamicTyping: true,
         skipEmptyLines: true,
         complete: (results) => {
-          const mapped = results.data.map((row: any) => ({
+          const rawMapped: RawTrackRecord[] = results.data.map((row: any) => ({
             track: row.track || row.title || row.song || 'Unknown',
             artist: row.artist || 'Unknown Artist',
             genre: row.genre || 'Unknown Genre',
             bpm: typeof row.bpm === 'number' ? row.bpm : typeof row.tempo === 'number' ? row.tempo : null,
           }));
+          const db = normalizeMusicRecords(rawMapped, 'csv');
           setPreset('');
-          setRecords(mapped);
+          setRecords(db.rawRecords);
         },
       });
     } else if (file.name.endsWith('.json')) {
@@ -234,8 +375,11 @@ function App() {
       reader.onload = (event) => {
         try {
           const parsed = JSON.parse(event.target?.result as string);
-          setPreset('');
-          setRecords(parsed);
+          if (Array.isArray(parsed)) {
+            const db = normalizeMusicRecords(parsed, 'csv');
+            setPreset('');
+            setRecords(db.rawRecords);
+          }
         } catch (err) {
           console.error(err);
           alert('Invalid JSON file format.');
@@ -268,6 +412,10 @@ function App() {
         onPresetChange={handlePresetChange}
         isDark={isDark}
         onToggleTheme={toggleTheme}
+        spotifyStatus={spotifyStatus}
+        playbackState={playbackState}
+        onManualSpotifyRefresh={handleManualSpotifyRefresh}
+        isRefreshingSpotify={isRefreshingSpotify}
       />
 
       <input
@@ -288,7 +436,7 @@ function App() {
             </h1>
             {summary && (
               <span className="text-xs text-[var(--text-tertiary)] font-mono">
-                {summary.totalTracks.toLocaleString()} tracks · {summary.totalArtists.toLocaleString()} artists · {summary.totalGenres.toLocaleString()} genres
+                {summary.totalTracks.toLocaleString()} tracks · {summary.totalArtists.toLocaleString()} artists · {summary.totalGenres.toLocaleString()} stellar systems
               </span>
             )}
           </div>

@@ -1,3 +1,5 @@
+// Canonical, normalized domain models for Celestial Music Universe
+
 export interface RawTrackRecord {
   id?: string;
   track: string;
@@ -12,6 +14,7 @@ export interface RawTrackRecord {
   year?: number;
   duration?: string; // e.g. "6:42"
   spotifyUrl?: string;
+  playedAt?: string; // ISO 8601 string if from listening history
 }
 
 export type MusicNodeType = 'genre' | 'subgenre' | 'artist' | 'track';
@@ -38,6 +41,128 @@ export interface GraphNodeData extends Record<string, unknown> {
   dimmed?: boolean;
 }
 
+// -------------------------------------------------------------
+// Canonical Normalized Music Entities
+// -------------------------------------------------------------
+export interface Genre {
+  id: string;
+  name: string;
+  trackCount: number;
+  artistCount: number;
+  color?: string;
+  relatedGenreNames: string[];
+}
+
+export interface Artist {
+  id: string;
+  name: string;
+  primaryGenre: string;
+  genres: string[];
+  trackCount: number;
+  spotifyUrl?: string;
+}
+
+export interface Track {
+  id: string;
+  title: string;
+  artistName: string;
+  genre: string;
+  subgenre?: string;
+  album?: string;
+  year?: number;
+  durationMs?: number;
+  durationFormatted?: string;
+  bpm?: number | null;
+  spotifyUrl?: string;
+  source: 'spotify' | 'csv' | 'preset' | 'discovery';
+}
+
+// -------------------------------------------------------------
+// Real-time Listening Event Model
+// -------------------------------------------------------------
+export interface ListeningEvent {
+  id: string; // deduplicated stable identifier e.g. trackId_playedAt
+  trackId: string;
+  trackTitle: string;
+  artistName: string;
+  genre: string;
+  subgenre?: string;
+  playedAt: string; // ISO timestamp
+  durationMs?: number;
+  source: 'spotify_recent' | 'spotify_live' | 'csv_history' | 'preset_playback';
+  bpm?: number | null;
+}
+
+// Active Playback State (subtle celestial influence, not a huge popup)
+export interface SpotifyPlaybackState {
+  isPlaying: boolean;
+  trackId: string | null;
+  trackTitle: string | null;
+  artistName: string | null;
+  genre: string | null;
+  progressMs: number;
+  durationMs: number;
+  bpm?: number | null;
+  albumArt?: string;
+  spotifyUrl?: string;
+  lastPolledAt: number;
+}
+
+// Spotify Connection Status
+export type SpotifyConnectionState = 
+  | 'disconnected'
+  | 'connecting'
+  | 'live'
+  | 'updated_recently'
+  | 'reconnecting'
+  | 'rate_limited'
+  | 'offline';
+
+export interface SpotifyStatusInfo {
+  state: SpotifyConnectionState;
+  lastSyncAt: number | null;
+  label: string;
+  retryAfterSeconds?: number;
+}
+
+// -------------------------------------------------------------
+// Normalized User Taste Profile
+// -------------------------------------------------------------
+export interface TasteProfile {
+  // Statistical distributions
+  genreDistribution: Record<string, number>; // e.g. { 'Techno': 0.38, 'House': 0.25 }
+  artistAffinity: Record<string, number>;    // e.g. { 'Bicep': 0.95 }
+  subgenreDistribution: Record<string, number>;
+
+  // Derived behavioral metrics
+  explorationScore: number;    // 0.0 - 1.0 (novelty seeking vs repeat listening)
+  diversityScore: number;      // 0.0 - 1.0 (entropy across genres)
+  genreGravity: Record<string, number>; // Importance weighting for celestial sun size & brightness
+  artistConcentration: number; // 0.0 - 1.0 (few artists vs broad listening)
+  repeatBehavior: number;      // 0.0 - 1.0
+  listeningIntensity: number;  // 0.0 - 1.0
+  
+  // Audio vibe profiles (deterministic derivation)
+  energyProfile: number;       // 0 - 100
+  grooveProfile: number;       // 0 - 100
+  chillProfile: number;        // 0 - 100
+  intensityProfile: number;    // 0 - 100
+  
+  bpmRange: {
+    min: number;
+    max: number;
+    preferred: number;
+  };
+
+  // Compatibility fields for legacy consumers
+  genres: Record<string, number>;
+  artists: Record<string, number>;
+  subgenres: Record<string, number>;
+  totalTracks: number;
+  uniqueArtists: number;
+  uniqueGenres: number;
+}
+
 export interface TasteSummary {
   totalTracks: number;
   totalArtists: number;
@@ -49,6 +174,7 @@ export interface TasteSummary {
   dominantMood?: string;
   moodBreakdown: { mood: string; count: number; percentage: number; color: string }[];
   energyScore?: number; // 0 - 100
+  tasteProfile?: TasteProfile;
 }
 
 export interface RecommendationItem {
@@ -64,7 +190,9 @@ export interface RecommendationItem {
   energy?: number;
 }
 
-// Celestial Universe System Model
+// -------------------------------------------------------------
+// Celestial Universe System Models
+// -------------------------------------------------------------
 export interface UniverseGenreSystem {
   id: string;
   name: string;
@@ -75,6 +203,8 @@ export interface UniverseGenreSystem {
   x: number;
   y: number;
   radius: number;
+  activityLevel?: number; // 0.0 - 1.0 based on recent listening
+  brightness?: number;   // Visual glow intensity
   subgenres: UniverseSubgenre[];
   artists: UniverseArtist[];
 }
@@ -88,7 +218,7 @@ export interface UniverseSubgenre {
   angle: number;
   x: number;
   y: number;
-  tier: 'planet' | 'moon'; // strong related = planet, minor = moon
+  tier: 'planet' | 'moon';
   celestialColor?: import('../utils/celestialColors').CelestialColorIdentity;
 }
 
@@ -102,9 +232,9 @@ export interface UniverseArtist {
   y: number;
   radius: number;
   tracks: UniverseTrack[];
-  // When an artist bridges two major genres
   bridgeGenre?: string;
   celestialColor?: import('../utils/celestialColors').CelestialColorIdentity;
+  isCurrentlyPlaying?: boolean;
 }
 
 export interface UniverseTrack {
@@ -124,6 +254,7 @@ export interface UniverseTrack {
   y: number;
   spotifyUrl?: string;
   celestialColor?: import('../utils/celestialColors').CelestialColorIdentity;
+  isCurrentlyPlaying?: boolean;
 }
 
 export type AsteroidType = 'obscure_artist' | 'track_cluster' | 'niche_subgenre' | 'cross_genre' | 'peripheral_track';
@@ -138,7 +269,7 @@ export interface UniverseAsteroid {
   trackCount: number;
   bpm?: number | null;
   reasons: string[];
-  sampleTracks?: Array<{ title: string; album?: string; year?: number; duration?: string }>;
+  sampleTracks?: Array<{ title: string; album?: string; year?: number; duration?: string; spotifyUrl?: string }>;
   x: number;
   y: number;
   baseX: number;
@@ -147,7 +278,7 @@ export interface UniverseAsteroid {
   orbitAngle: number;
   orbitSpeed: number;
   radius: number; // small: 3.5px, medium: 5.5px, large: 8.5px
-  vertices: Array<{ x: number; y: number }>; // Irregular asteroid silhouette offsets
+  vertices: Array<{ x: number; y: number }>;
   color: string;
   celestialColor?: import('../utils/celestialColors').CelestialColorIdentity;
 }
@@ -156,7 +287,8 @@ export type MeteorEventType =
   | 'new_discovery'       // Recommendation entering user universe
   | 'recently_played'     // Recently heard track passing through
   | 'cross_genre_link'    // Traveling bridge between two genres
-  | 'newly_imported';     // Newly imported track
+  | 'new_import'          // Newly imported track
+  | 'listening_transition'; // Transition between two tracks
 
 export interface UniverseMeteor {
   id: string;
@@ -181,10 +313,10 @@ export interface UniverseMeteor {
   color: string;
   celestialColor?: import('../utils/celestialColors').CelestialColorIdentity;
   createdAt: number; // timestamp
-  destinationAsteroid?: UniverseAsteroid; // Becomes this when reaches destination!
+  destinationAsteroid?: UniverseAsteroid;
 }
 
-export type ZoomLevel = 1 | 2 | 3 | 4; // 1: Universe, 2: Genre System, 3: Artist System, 4: Track
+export type ZoomLevel = 1 | 2 | 3 | 4;
 
 export interface CelestialUniverseData {
   genres: UniverseGenreSystem[];
@@ -196,26 +328,12 @@ export interface CelestialUniverseData {
   meteors?: UniverseMeteor[];
 }
 
-// User Normalized Taste Profile
-export interface TasteProfile {
-  genres: Record<string, number>; // normalized weights, e.g. techno: 0.34
-  artists: Record<string, number>; // artist familiarity/weight
-  subgenres: Record<string, number>;
-  bpmRange: {
-    min: number;
-    max: number;
-    preferred: number;
-  };
-  totalTracks: number;
-  uniqueArtists: number;
-}
-
-// Recommendation Category
 export type DiscoveryCategory = 'nearby' | 'adjacent' | 'unknown';
 
-// Structured Recommendation Item from Engine
 export interface DiscoveryRecommendation {
   id: string;
+  artistId?: string;
+  trackId?: string;
   artist: string;
   genre: string;
   subgenre?: string;
@@ -235,7 +353,6 @@ export interface DiscoveryRecommendation {
   spotifyUrl?: string;
 }
 
-// Discovery System in the Celestial Universe
 export interface CelestialDiscoverySystem {
   id: string;
   recommendation: DiscoveryRecommendation;
@@ -248,4 +365,3 @@ export interface CelestialDiscoverySystem {
   color: string;
   celestialColor?: import('../utils/celestialColors').CelestialColorIdentity;
 }
-

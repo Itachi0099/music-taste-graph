@@ -292,17 +292,19 @@ export function renderArtistStar(
     isDimmed: boolean;
     time: number;
     isDark?: boolean;
+    isCurrentlyPlaying?: boolean;
   }
 ) {
-  const { x, y, radius, celestialColor, isSelected, isHovered, isDimmed, time, isDark = true } = params;
+  const { x, y, radius, celestialColor, isSelected, isHovered, isDimmed, time, isDark = true, isCurrentlyPlaying = false } = params;
   const { glowRgb, coreRgb } = celestialColor;
 
   const dimFactor = isDimmed ? 0.22 : 1.0;
-  const starRadius = radius + (isSelected ? 3.5 : isHovered ? 1.5 : 0);
+  const playPulse = isCurrentlyPlaying ? Math.sin(time * 6.0) * 2.5 : 0;
+  const starRadius = radius + (isSelected ? 3.5 : isHovered ? 1.5 : 0) + (isCurrentlyPlaying ? 2.0 : 0);
 
-  // Subtle star twinkle
+  // Subtle star twinkle or currently-playing rhythm pulse
   const twinkle = Math.sin(time * 2.4 + radius * 5) * 0.4;
-  const activeRadius = Math.max(4, starRadius + twinkle * 0.3);
+  const activeRadius = Math.max(4, starRadius + twinkle * 0.3 + playPulse * 0.4);
 
   // A. Artist Star Small Glow Halo
   const haloRad = activeRadius * 2.4;
@@ -371,19 +373,20 @@ export function renderTrackStar(
     isHovered: boolean;
     isDimmed: boolean;
     isDark?: boolean;
+    isCurrentlyPlaying?: boolean;
   }
 ) {
-  const { x, y, celestialColor, isSelected, isHovered, isDimmed, isDark = true } = params;
+  const { x, y, celestialColor, isSelected, isHovered, isDimmed, isDark = true, isCurrentlyPlaying = false } = params;
   const { glowRgb, coreRgb } = celestialColor;
 
   const dimFactor = isDimmed ? 0.22 : 1.0;
-  const radius = isSelected ? 4.8 : isHovered ? 3.6 : 2.6;
+  const radius = isSelected ? 4.8 : isCurrentlyPlaying ? 4.2 : isHovered ? 3.6 : 2.6;
 
-  // Selected or hovered gets a tiny aura
-  if (isSelected || isHovered) {
-    const auraRad = radius * 2.6;
+  // Selected, hovered, or currently playing gets an active aura
+  if (isSelected || isHovered || isCurrentlyPlaying) {
+    const auraRad = radius * (isCurrentlyPlaying ? 3.2 : 2.6);
     const grad = ctx.createRadialGradient(x, y, radius * 0.4, x, y, auraRad);
-    grad.addColorStop(0, `rgba(${glowRgb}, ${0.45 * dimFactor})`);
+    grad.addColorStop(0, `rgba(${glowRgb}, ${0.5 * dimFactor})`);
     grad.addColorStop(1, 'transparent');
     ctx.fillStyle = grad;
     ctx.beginPath();

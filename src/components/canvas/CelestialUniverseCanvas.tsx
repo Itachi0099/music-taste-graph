@@ -571,6 +571,7 @@ export const CelestialUniverseCanvas: React.FC<CelestialUniverseCanvasProps> = (
             isDimmed: finalDim,
             time,
             isDark,
+            isCurrentlyPlaying: artist.isCurrentlyPlaying,
           });
 
           // Artist Name Label
@@ -631,6 +632,7 @@ export const CelestialUniverseCanvas: React.FC<CelestialUniverseCanvasProps> = (
                 isHovered: isTrackHovered,
                 isDimmed: finalTrackDim,
                 isDark,
+                isCurrentlyPlaying: track.isCurrentlyPlaying,
               });
 
               if (cam.zoom >= 1.7 || isTrackSelected || isArtistSelected) {

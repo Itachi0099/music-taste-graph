@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
-import { Search, Sparkles, Upload, MoreHorizontal, Sun, Moon } from 'lucide-react';
+import { Search, Sparkles, Upload, MoreHorizontal, Sun, Moon, Radio, RefreshCw } from 'lucide-react';
 import { loginWithSpotify } from '../utils/spotify';
+import type { SpotifyStatusInfo, SpotifyPlaybackState } from '../types';
 
 interface TopNavigationProps {
   searchQuery: string;
@@ -12,6 +13,10 @@ interface TopNavigationProps {
   onPresetChange: (val: string) => void;
   isDark: boolean;
   onToggleTheme: () => void;
+  spotifyStatus?: SpotifyStatusInfo;
+  playbackState?: SpotifyPlaybackState | null;
+  onManualSpotifyRefresh?: () => void;
+  isRefreshingSpotify?: boolean;
 }
 
 export const TopNavigation: React.FC<TopNavigationProps> = ({
@@ -24,16 +29,60 @@ export const TopNavigation: React.FC<TopNavigationProps> = ({
   onPresetChange,
   isDark,
   onToggleTheme,
+  spotifyStatus,
+  playbackState,
+  onManualSpotifyRefresh,
+  isRefreshingSpotify = false,
 }) => {
   const [showMenu, setShowMenu] = useState(false);
 
+  // Status badge styling based on Spotify connection state
+  const isConnected = spotifyStatus && spotifyStatus.state !== 'disconnected';
+  const isLive = spotifyStatus?.state === 'live' || (playbackState?.isPlaying);
+
   return (
-    <header className="h-14 border-b border-[var(--border-primary)] bg-[var(--bg-primary)] px-6 md:px-10 flex items-center justify-between select-none relative z-30 transition-colors">
-      {/* Left: Wordmark */}
-      <div className="flex items-center gap-6">
+    <header className="h-14 border-b border-[var(--border-primary)] bg-[var(--bg-primary)] px-4 md:px-8 flex items-center justify-between select-none relative z-30 transition-colors">
+      {/* Left: Wordmark & Spotify Live Status indicator */}
+      <div className="flex items-center gap-4">
         <span className="font-serif text-lg font-bold tracking-tight text-[var(--text-primary)]">
           SymphonyGraph
         </span>
+
+        {/* Ambient Spotify stream status badge */}
+        {isConnected ? (
+          <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-[var(--bg-surface)] border border-[var(--border-subtle)] text-[11px] font-mono text-[var(--text-secondary)]">
+            <span
+              className={`w-1.5 h-1.5 rounded-full ${
+                isLive
+                  ? 'bg-emerald-400 animate-pulse'
+                  : spotifyStatus.state === 'rate_limited'
+                  ? 'bg-amber-400'
+                  : spotifyStatus.state === 'offline'
+                  ? 'bg-rose-400'
+                  : 'bg-emerald-500/60'
+              }`}
+            />
+            <span className="hidden sm:inline">
+              {playbackState?.isPlaying && playbackState.trackTitle
+                ? `${playbackState.trackTitle} · ${playbackState.artistName}`
+                : spotifyStatus.label}
+            </span>
+            <span className="sm:hidden">
+              {isLive ? 'Live' : 'Synced'}
+            </span>
+
+            {onManualSpotifyRefresh && (
+              <button
+                onClick={onManualSpotifyRefresh}
+                disabled={isRefreshingSpotify}
+                className="ml-1 p-0.5 text-[var(--text-tertiary)] hover:text-[var(--text-primary)] transition-colors disabled:opacity-40"
+                title="Refresh Spotify history now"
+              >
+                <RefreshCw size={11} className={isRefreshingSpotify ? 'animate-spin' : ''} />
+              </button>
+            )}
+          </div>
+        ) : null}
       </div>
 
       {/* Center: Search */}
@@ -62,7 +111,8 @@ export const TopNavigation: React.FC<TopNavigationProps> = ({
           <option value="electronic" className="bg-[var(--bg-card)] text-[var(--text-primary)]">Electronic / Club</option>
           <option value="indie" className="bg-[var(--bg-card)] text-[var(--text-primary)]">Indie / Alternative</option>
           <option value="eclectic" className="bg-[var(--bg-card)] text-[var(--text-primary)]">Eclectic Mix</option>
-          <option value="" className="bg-[var(--bg-card)] text-[var(--text-primary)]">Custom</option>
+          <option value="spotify" className="bg-[var(--bg-card)] text-[var(--text-primary)]">Spotify Stream</option>
+          <option value="" className="bg-[var(--bg-card)] text-[var(--text-primary)]">Custom Library</option>
         </select>
 
         {/* Theme Toggle Button */}
@@ -98,12 +148,21 @@ export const TopNavigation: React.FC<TopNavigationProps> = ({
           <span className="hidden sm:inline">Import</span>
         </button>
 
-        <button
-          onClick={loginWithSpotify}
-          className="px-3 py-1.5 rounded bg-[var(--text-primary)] text-[var(--bg-primary)] hover:opacity-90 font-medium transition-all"
-        >
-          Spotify Sync
-        </button>
+        {/* Continuous Stream status instead of mandatory sync */}
+        {!isConnected ? (
+          <button
+            onClick={loginWithSpotify}
+            className="px-3 py-1.5 rounded bg-[var(--text-primary)] text-[var(--bg-primary)] hover:opacity-90 font-medium transition-all flex items-center gap-1.5"
+          >
+            <Radio size={12} />
+            <span>Connect Spotify</span>
+          </button>
+        ) : (
+          <div className="hidden lg:flex items-center gap-1 text-[11px] text-[var(--text-tertiary)] font-mono pl-1">
+            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+            <span>Spotify Live</span>
+          </div>
+        )}
 
         {/* Overflow for mobile */}
         <div className="relative sm:hidden">
@@ -114,12 +173,13 @@ export const TopNavigation: React.FC<TopNavigationProps> = ({
             <MoreHorizontal size={16} />
           </button>
           {showMenu && (
-            <div className="absolute right-0 mt-2 w-40 bg-[var(--bg-card)] border border-[var(--border-primary)] rounded-lg shadow-lg py-1 z-50">
+            <div className="absolute right-0 mt-2 w-44 bg-[var(--bg-card)] border border-[var(--border-primary)] rounded-lg shadow-lg py-1 z-50">
               <button
                 onClick={() => { onOpenRecommendations(); setShowMenu(false); }}
-                className="w-full text-left px-3 py-1.5 text-xs text-[var(--text-secondary)] hover:bg-[var(--bg-surface)]"
+                className="w-full text-left px-3 py-1.5 text-xs text-[var(--text-secondary)] hover:bg-[var(--bg-surface)] flex items-center gap-2"
               >
-                Discoveries
+                <Sparkles size={12} className="text-amber-400" />
+                <span>Discoveries</span>
               </button>
               <button
                 onClick={() => { onOpenInsights(); setShowMenu(false); }}
@@ -127,6 +187,14 @@ export const TopNavigation: React.FC<TopNavigationProps> = ({
               >
                 Insights
               </button>
+              {!isConnected && (
+                <button
+                  onClick={() => { loginWithSpotify(); setShowMenu(false); }}
+                  className="w-full text-left px-3 py-1.5 text-xs text-emerald-400 hover:bg-[var(--bg-surface)]"
+                >
+                  Connect Spotify
+                </button>
+              )}
             </div>
           )}
         </div>
