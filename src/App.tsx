@@ -24,7 +24,8 @@ import {
   getSpotifyToken, 
   fetchSpotifyTopTracks, 
   fetchCurrentlyPlaying, 
-  fetchRecentlyPlayedEvents 
+  fetchRecentlyPlayedEvents,
+  clearTokens,
 } from './utils/spotify';
 import { normalizeMusicRecords, ingestListeningEvents } from './utils/normalizer';
 import type { 
@@ -196,8 +197,12 @@ function App() {
     else if (newPreset === 'eclectic') setRecords(eclecticData);
   };
 
-  // Reconcile Spotify events incrementally
+  const isReconcilingRef = useRef(false);
+
+  // Reconcile Spotify events incrementally with overlap protection (R-03)
   const reconcileSpotifyData = useCallback(async (token: string) => {
+    if (isReconcilingRef.current) return;
+    isReconcilingRef.current = true;
     try {
       // 1. Fetch currently playing
       const current = await fetchCurrentlyPlaying(token);
@@ -230,6 +235,8 @@ function App() {
       });
     } catch (err) {
       console.warn('Spotify reconcile error (keeping local universe intact):', err);
+    } finally {
+      isReconcilingRef.current = false;
     }
   }, [records]);
 
@@ -245,6 +252,18 @@ function App() {
       setIsRefreshingSpotify(false);
     }
   };
+
+  // Disconnect Spotify session
+  const handleDisconnectSpotify = useCallback(() => {
+    clearTokens();
+    setSpotifyStatus({
+      state: 'disconnected',
+      lastSyncAt: null,
+      label: 'Spotify · Offline',
+    });
+    setPlaybackState(null);
+    setPreset('electronic');
+  }, []);
 
   // Automatic Spotify session restoration & continuous polling loop
   useEffect(() => {
@@ -289,6 +308,13 @@ function App() {
               const activeToken = await getSpotifyToken();
               if (activeToken) {
                 await reconcileSpotifyData(activeToken);
+              } else {
+                setSpotifyStatus({
+                  state: 'disconnected',
+                  lastSyncAt: null,
+                  label: 'Spotify · Offline',
+                });
+                if (pollInterval) clearInterval(pollInterval);
               }
             }
           }, 20000);
@@ -416,6 +442,7 @@ function App() {
         playbackState={playbackState}
         onManualSpotifyRefresh={handleManualSpotifyRefresh}
         isRefreshingSpotify={isRefreshingSpotify}
+        onDisconnectSpotify={handleDisconnectSpotify}
       />
 
       <input

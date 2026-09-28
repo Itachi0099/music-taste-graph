@@ -61,7 +61,7 @@ export function buildCelestialUniverse(
   const artistGenres = new Map<string, Set<string>>();
 
   records.forEach((rec) => {
-    const genre = (rec.genre || 'Electronic').trim();
+    const genre = (rec.genre || 'Unknown').trim();
     const artist = (rec.artist || 'Unknown Artist').trim();
 
     if (!genreRecords.has(genre)) genreRecords.set(genre, []);
@@ -242,7 +242,7 @@ export function buildCelestialUniverse(
 
   artistRecords.forEach((aTracks, artistName) => {
     const genres = Array.from(artistGenres.get(artistName) || []);
-    const primaryGenre = genres[0] || 'Electronic';
+    const primaryGenre = genres[0] || 'Unknown';
     const secondaryGenres = genres.slice(1);
 
     const isBridge = genres.length >= 2;

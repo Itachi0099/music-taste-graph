@@ -36,7 +36,7 @@ export function normalizeMusicRecords(
   for (const rec of records) {
     const trackTitle = (rec.track || '').trim();
     const artistName = (rec.artist || 'Unknown Artist').trim();
-    const genreName = (rec.genre || 'Electronic').trim();
+    const genreName = (rec.genre || 'Unknown').trim();
     const subgenreName = rec.subgenre?.trim();
 
     if (!trackTitle) continue;

@@ -41,7 +41,7 @@ export function extractTasteProfile(records: RawTrackRecord[]): TasteProfile {
   const bpmList: number[] = [];
 
   records.forEach((rec) => {
-    const genre = (rec.genre || 'Electronic').trim();
+    const genre = (rec.genre || 'Unknown').trim();
     const artist = (rec.artist || 'Unknown Artist').trim();
     const subgenre = rec.subgenre?.trim();
 

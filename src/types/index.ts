@@ -365,3 +365,14 @@ export interface CelestialDiscoverySystem {
   color: string;
   celestialColor?: import('../utils/celestialColors').CelestialColorIdentity;
 }
+
+export type UniverseSelection = 
+  | { type: 'genre'; item: UniverseGenreSystem }
+  | { type: 'subgenre'; item: UniverseSubgenre }
+  | { type: 'artist'; item: UniverseArtist }
+  | { type: 'track'; item: UniverseTrack }
+  | { type: 'discovery'; item: CelestialDiscoverySystem }
+  | { type: 'asteroid'; item: UniverseAsteroid }
+  | { type: 'meteor'; item: UniverseMeteor }
+  | null;
+

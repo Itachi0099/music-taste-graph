@@ -1,6 +1,14 @@
 import type { RawTrackRecord, ListeningEvent, SpotifyPlaybackState } from '../types';
+import type {
+  SpotifyTrackItem,
+  SpotifyTopTracksPayload,
+  SpotifyRecentlyPlayedPayload,
+  SpotifySeveralArtistsPayload,
+  SpotifyCurrentlyPlayingPayload,
+  SpotifyTokenEndpointResponse,
+} from '../types/spotify';
 
-const CLIENT_ID = import.meta.env.VITE_SPOTIFY_CLIENT_ID || '663e5f2a2950473ba037426e5343b8df';
+const CLIENT_ID = import.meta.env.VITE_SPOTIFY_CLIENT_ID;
 
 export const SPOTIFY_REDIRECT_URI =
   import.meta.env.VITE_SPOTIFY_REDIRECT_URI ||
@@ -12,7 +20,7 @@ export const getRedirectUri = (): string => {
   return SPOTIFY_REDIRECT_URI;
 };
 
-// Complete Spotify Scopes for automatic sync, current playback, recently played, top artists, and saved tracks
+// Spotify Scopes for sync, current playback, recently played, and top tracks
 export const SPOTIFY_SCOPES = [
   'user-top-read',
   'user-read-recently-played',
@@ -37,16 +45,27 @@ const generateCodeChallenge = async (codeVerifier: string): Promise<string> => {
 };
 
 export const loginWithSpotify = async () => {
+  if (!CLIENT_ID) {
+    throw new Error('Spotify Client ID is not configured (missing VITE_SPOTIFY_CLIENT_ID).');
+  }
+
   const codeVerifier = generateRandomString(64);
   const codeChallenge = await generateCodeChallenge(codeVerifier);
   const redirectUri = getRedirectUri();
 
-  console.log("SPOTIFY REDIRECT URI:", redirectUri);
-
-  localStorage.setItem('spotify_code_verifier', codeVerifier);
+  // Store codeVerifier temporarily only in sessionStorage for the duration of the redirect
   sessionStorage.setItem('spotify_code_verifier', codeVerifier);
-  localStorage.setItem('spotify_redirect_uri', redirectUri);
   sessionStorage.setItem('spotify_redirect_uri', redirectUri);
+
+  // Clean any old localStorage tokens
+  try {
+    localStorage.removeItem('spotify_code_verifier');
+    localStorage.removeItem('spotify_redirect_uri');
+    localStorage.removeItem('spotify_access_token');
+    localStorage.removeItem('spotify_refresh_token');
+  } catch {
+    // Ignore storage errors in restricted contexts
+  }
 
   const params = new URLSearchParams({
     client_id: CLIENT_ID,
@@ -59,109 +78,109 @@ export const loginWithSpotify = async () => {
   });
 
   const authUrl = `https://accounts.spotify.com/authorize?${params.toString()}`;
-  console.log("SPOTIFY AUTHORIZE URL:", authUrl);
-
   window.location.href = authUrl;
 };
 
+// In-memory token management (no tokens in localStorage or sessionStorage)
+let inMemoryAccessToken: string | null = null;
+let tokenExpiresAt = 0;
 let tokenExchangePromise: Promise<string | null> | null = null;
+let refreshPromise: Promise<string | null> | null = null;
 
 export const getStoredSpotifyToken = (): string | null => {
-  if (typeof window === 'undefined') return null;
-  return localStorage.getItem('spotify_access_token') || sessionStorage.getItem('spotify_access_token');
+  if (inMemoryAccessToken && Date.now() < tokenExpiresAt) {
+    return inMemoryAccessToken;
+  }
+  return null;
 };
 
-export const getStoredRefreshToken = (): string | null => {
-  if (typeof window === 'undefined') return null;
-  return localStorage.getItem('spotify_refresh_token') || sessionStorage.getItem('spotify_refresh_token');
-};
+export const saveTokens = (accessToken: string, expiresInSeconds: number = 3600) => {
+  inMemoryAccessToken = accessToken;
+  // Expire 60 seconds early to avoid race conditions
+  tokenExpiresAt = Date.now() + Math.max(30, expiresInSeconds - 60) * 1000;
 
-export const saveTokens = (accessToken: string, refreshToken?: string) => {
-  if (typeof window === 'undefined') return;
-  sessionStorage.setItem('spotify_access_token', accessToken);
-  localStorage.setItem('spotify_access_token', accessToken);
-  if (refreshToken) {
-    sessionStorage.setItem('spotify_refresh_token', refreshToken);
-    localStorage.setItem('spotify_refresh_token', refreshToken);
+  // Clean any residual tokens from browser storage
+  if (typeof window !== 'undefined') {
+    try {
+      localStorage.removeItem('spotify_access_token');
+      localStorage.removeItem('spotify_refresh_token');
+      sessionStorage.removeItem('spotify_access_token');
+      sessionStorage.removeItem('spotify_refresh_token');
+    } catch {
+      // Storage access may be restricted
+    }
   }
 };
 
 export const clearTokens = () => {
-  if (typeof window === 'undefined') return;
-  sessionStorage.removeItem('spotify_access_token');
-  localStorage.removeItem('spotify_access_token');
-  sessionStorage.removeItem('spotify_refresh_token');
-  localStorage.removeItem('spotify_refresh_token');
+  inMemoryAccessToken = null;
+  tokenExpiresAt = 0;
+
+  if (typeof window !== 'undefined') {
+    try {
+      localStorage.removeItem('spotify_access_token');
+      localStorage.removeItem('spotify_refresh_token');
+      sessionStorage.removeItem('spotify_access_token');
+      sessionStorage.removeItem('spotify_refresh_token');
+      sessionStorage.removeItem('spotify_code_verifier');
+      sessionStorage.removeItem('spotify_redirect_uri');
+    } catch {
+      // Storage access may be restricted
+    }
+  }
+
+  // Clear server-side session cookie
+  fetch('/api/auth/spotify/logout', {
+    method: 'POST',
+    credentials: 'include',
+  }).catch(() => {});
 };
 
 /**
- * Refreshes an expired Spotify access token using the stored refresh_token
+ * Refreshes Spotify access token using the server-side HttpOnly session cookie (F-01, F-03)
  */
 export const refreshSpotifyToken = async (): Promise<string | null> => {
-  const refreshToken = getStoredRefreshToken();
-  if (!refreshToken) return null;
-
-  try {
-    const res = await fetch('/api/auth/spotify/refresh', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ refresh_token: refreshToken }),
-    });
-
-    if (res.ok) {
-      const data = await res.json();
-      if (data.access_token) {
-        saveTokens(data.access_token, data.refresh_token || refreshToken);
-        return data.access_token;
-      }
-    }
-  } catch (err) {
-    console.warn('Backend refresh failed, trying direct Spotify endpoint:', err);
+  if (refreshPromise) {
+    return refreshPromise;
   }
 
-  // Fallback to direct accounts.spotify.com token refresh
-  try {
-    const body = new URLSearchParams({
-      grant_type: 'refresh_token',
-      refresh_token: refreshToken,
-      client_id: CLIENT_ID,
-    });
+  refreshPromise = (async () => {
+    try {
+      const res = await fetch('/api/auth/spotify/refresh', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+      });
 
-    const fallbackRes = await fetch('https://accounts.spotify.com/api/token', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: body.toString(),
-    });
-
-    if (fallbackRes.ok) {
-      const data = await fallbackRes.json();
-      if (data.access_token) {
-        saveTokens(data.access_token, data.refresh_token || refreshToken);
-        return data.access_token;
+      if (res.ok) {
+        const data: SpotifyTokenEndpointResponse = await res.json();
+        if (data.access_token) {
+          saveTokens(data.access_token, data.expires_in);
+          return data.access_token;
+        }
+      } else {
+        // Session invalid or expired
+        inMemoryAccessToken = null;
+        tokenExpiresAt = 0;
       }
+    } catch (err) {
+      console.warn('Spotify session refresh failed:', err);
+      inMemoryAccessToken = null;
+      tokenExpiresAt = 0;
+    } finally {
+      refreshPromise = null;
     }
-  } catch (err) {
-    console.error('Direct token refresh error:', err);
-  }
 
-  return null;
+    return null;
+  })();
+
+  return refreshPromise;
 };
 
 /**
  * Handles Spotify PKCE Token retrieval and URL code exchange
  */
 export const getSpotifyToken = async (): Promise<string | null> => {
-  if (window.location.hash) {
-    const hash = window.location.hash.substring(1);
-    const params = new URLSearchParams(hash);
-    const token = params.get('access_token');
-    if (token) {
-      window.history.replaceState(null, '', window.location.pathname);
-      saveTokens(token);
-      return token;
-    }
-  }
-
   if (tokenExchangePromise) {
     return tokenExchangePromise;
   }
@@ -175,67 +194,48 @@ export const getSpotifyToken = async (): Promise<string | null> => {
 
   const code = searchParams.get('code');
   if (!code) {
-    return getStoredSpotifyToken();
+    // If we have an active in-memory token, return it
+    const stored = getStoredSpotifyToken();
+    if (stored) return stored;
+
+    // Otherwise, check if an existing session cookie is present and can be renewed
+    return refreshSpotifyToken();
   }
 
+  // Handle OAuth code callback
   window.history.replaceState(null, '', window.location.pathname);
 
-  const verifier = localStorage.getItem('spotify_code_verifier') || sessionStorage.getItem('spotify_code_verifier');
+  const verifier = sessionStorage.getItem('spotify_code_verifier');
+  const redirectUri = sessionStorage.getItem('spotify_redirect_uri') || getRedirectUri();
+
+  sessionStorage.removeItem('spotify_code_verifier');
+  sessionStorage.removeItem('spotify_redirect_uri');
+
   if (!verifier) {
-    const cachedToken = getStoredSpotifyToken();
-    if (cachedToken) return cachedToken;
-    throw new Error('Spotify code verifier not found. Please try connecting again.');
+    const existing = getStoredSpotifyToken();
+    if (existing) return existing;
+    return refreshSpotifyToken();
   }
-
-  const redirectUri =
-    localStorage.getItem('spotify_redirect_uri') ||
-    sessionStorage.getItem('spotify_redirect_uri') ||
-    getRedirectUri();
-
-  console.log("SPOTIFY REDIRECT URI:", redirectUri);
 
   tokenExchangePromise = (async () => {
     try {
       const backendResponse = await fetch('/api/auth/spotify/token', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ code, code_verifier: verifier, redirect_uri: redirectUri })
+        credentials: 'include',
+        body: JSON.stringify({ code, code_verifier: verifier, redirect_uri: redirectUri }),
       });
 
-      let data;
-      if (backendResponse.ok) {
-        data = await backendResponse.json();
-      } else {
-        const body = new URLSearchParams({
-          client_id: CLIENT_ID,
-          grant_type: 'authorization_code',
-          code,
-          redirect_uri: redirectUri,
-          code_verifier: verifier,
-        });
-
-        const fallbackResponse = await fetch('https://accounts.spotify.com/api/token', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-          body: body.toString(),
-        });
-
-        if (!fallbackResponse.ok) {
-          const errorData = await fallbackResponse.json().catch(() => ({}));
-          throw new Error(errorData.error_description || errorData.error || 'Failed to exchange authorization code');
-        }
-        data = await fallbackResponse.json();
+      if (!backendResponse.ok) {
+        const errorData = await backendResponse.json().catch(() => ({}));
+        throw new Error(errorData.error || 'Failed to exchange authorization code');
       }
 
-      const accessToken = data.access_token as string;
-      saveTokens(accessToken, data.refresh_token);
-      return accessToken;
+      const data: SpotifyTokenEndpointResponse = await backendResponse.json();
+      saveTokens(data.access_token, data.expires_in);
+      return data.access_token;
     } finally {
       tokenExchangePromise = null;
-      localStorage.removeItem('spotify_code_verifier');
-      sessionStorage.removeItem('spotify_code_verifier');
-      localStorage.removeItem('spotify_redirect_uri');
-      sessionStorage.removeItem('spotify_redirect_uri');
     }
   })();
 
@@ -244,8 +244,21 @@ export const getSpotifyToken = async (): Promise<string | null> => {
 
 export const getAccessTokenFromUrl = getSpotifyToken;
 
-// Helper to make authenticated requests with 401 retry & 429 backoff
+// Rate-limiting backoff and 401 retry state (R-03)
+let rateLimitResetTime = 0;
+let consecutiveAuthFailures = 0;
+
+// Helper to make authenticated requests with bounded 401 retry & 429 backoff
 async function spotifyFetch(url: string, token: string): Promise<Response> {
+  const now = Date.now();
+  if (now < rateLimitResetTime) {
+    const waitSec = Math.ceil((rateLimitResetTime - now) / 1000);
+    return new Response(JSON.stringify({ error: 'Rate limit active', retryAfter: waitSec }), {
+      status: 429,
+      headers: { 'Retry-After': String(waitSec) },
+    });
+  }
+
   let activeToken = token;
   let res = await fetch(url, {
     headers: { Authorization: `Bearer ${activeToken}` },
@@ -253,26 +266,36 @@ async function spotifyFetch(url: string, token: string): Promise<Response> {
 
   // Handle 401 Unauthorized -> Refresh token
   if (res.status === 401) {
-    const refreshed = await refreshSpotifyToken();
-    if (refreshed) {
-      activeToken = refreshed;
-      res = await fetch(url, {
-        headers: { Authorization: `Bearer ${activeToken}` },
-      });
+    consecutiveAuthFailures++;
+    if (consecutiveAuthFailures <= 2) {
+      const refreshed = await refreshSpotifyToken();
+      if (refreshed) {
+        activeToken = refreshed;
+        consecutiveAuthFailures = 0;
+        res = await fetch(url, {
+          headers: { Authorization: `Bearer ${activeToken}` },
+        });
+      }
     }
+  } else {
+    consecutiveAuthFailures = 0;
   }
 
   // Handle 429 Rate Limit
   if (res.status === 429) {
-    const retryAfter = res.headers.get('Retry-After');
-    console.warn(`Spotify 429 Rate Limit hit. Retry-After: ${retryAfter || 'unknown'}s`);
+    const retryAfterHeader = res.headers.get('Retry-After');
+    const retryAfterSec = retryAfterHeader
+      ? Math.min(Math.max(parseInt(retryAfterHeader, 10), 1), 300)
+      : 5;
+    rateLimitResetTime = Date.now() + retryAfterSec * 1000;
+    console.warn(`Spotify rate limit reached (429). Bounded backoff for ${retryAfterSec}s.`);
   }
 
   return res;
 }
 
 /**
- * Resolves artist genres via open iTunes directory fallback if Spotify returns 403 or empty genres
+ * Resolves artist genres via open iTunes directory fallback if Spotify returns empty genres
  */
 async function resolveArtistGenres(artistNames: string[], knownGenreMap: Record<string, string>): Promise<Record<string, string>> {
   const missing = artistNames.filter((name) => !knownGenreMap[name] || knownGenreMap[name] === 'Unknown');
@@ -318,7 +341,7 @@ export const fetchCurrentlyPlaying = async (token: string): Promise<SpotifyPlayb
     }
 
     if (!res.ok) return null;
-    const data = await res.json();
+    const data: SpotifyCurrentlyPlayingPayload = await res.json();
     if (!data || !data.item) {
       return {
         isPlaying: false,
@@ -340,7 +363,7 @@ export const fetchCurrentlyPlaying = async (token: string): Promise<SpotifyPlayb
       trackId: item.id || `spotify-${item.name}`,
       trackTitle: item.name,
       artistName,
-      genre: null, // to be mapped by library
+      genre: null,
       progressMs: data.progress_ms || 0,
       durationMs: item.duration_ms || 0,
       albumArt: item.album?.images?.[0]?.url,
@@ -348,7 +371,7 @@ export const fetchCurrentlyPlaying = async (token: string): Promise<SpotifyPlayb
       lastPolledAt: Date.now(),
     };
   } catch (err) {
-    console.warn('Error fetching currently playing:', err);
+    console.warn('Error fetching currently playing track:', err);
     return null;
   }
 };
@@ -369,17 +392,19 @@ export const fetchRecentlyPlayedEvents = async (
     const res = await spotifyFetch(url, token);
     if (!res.ok) return [];
 
-    const data = await res.json();
+    const data: SpotifyRecentlyPlayedPayload = await res.json();
     if (!data.items || !Array.isArray(data.items)) return [];
 
-    const artistNames = (data.items.map((item: any) => item.track?.artists?.[0]?.name).filter(Boolean)) as string[];
+    const artistNames = data.items
+      .map((item) => item.track?.artists?.[0]?.name)
+      .filter((name): name is string => Boolean(name));
     const genreMap = await resolveArtistGenres([...new Set(artistNames)], {});
 
-    return data.items.map((item: any) => {
-      const track = item.track;
+    return data.items.map((item) => {
+      const track: SpotifyTrackItem = item.track;
       const artist = track?.artists?.[0]?.name || 'Unknown Artist';
       const playedAt = item.played_at || new Date().toISOString();
-      const genre = genreMap[artist] || 'Electronic';
+      const genre = genreMap[artist] || 'Unknown'; // R-04: Do not default unknown artists to Electronic
 
       return {
         id: `${track.id || track.name}_${playedAt}`,
@@ -405,35 +430,35 @@ export const fetchRecentlyPlayedEvents = async (
 export const fetchSpotifyTopTracks = async (token: string): Promise<RawTrackRecord[]> => {
   const response = await spotifyFetch('https://api.spotify.com/v1/me/top/tracks?limit=35&time_range=medium_term', token);
   if (!response.ok) throw new Error('Failed to fetch Spotify tracks');
-  const data = await response.json();
-  
+  const data: SpotifyTopTracksPayload = await response.json();
+
   let genreMap: Record<string, string> = {};
-  const artistIds = [...new Set(data.items.map((item: any) => item.artists[0]?.id).filter(Boolean))].slice(0, 50);
+  const artistIds = [...new Set(data.items.map((item) => item.artists[0]?.id).filter(Boolean))].slice(0, 50);
 
   if (artistIds.length > 0) {
     try {
       const artistsResponse = await spotifyFetch(`https://api.spotify.com/v1/artists?ids=${artistIds.join(',')}`, token);
       if (artistsResponse.ok) {
-        const artistsData = await artistsResponse.json();
-        artistsData.artists?.forEach((artist: any) => {
+        const artistsData: SpotifySeveralArtistsPayload = await artistsResponse.json();
+        artistsData.artists?.forEach((artist) => {
           if (artist?.name && artist.genres?.length > 0) {
             genreMap[artist.name] = artist.genres[0];
           }
         });
       }
     } catch {
-      // Fallback below
+      // Fallback to resolveArtistGenres below
     }
   }
 
-  const uniqueArtists = [...new Set(data.items.map((item: any) => item.artists[0]?.name).filter(Boolean))] as string[];
+  const uniqueArtists = [...new Set(data.items.map((item) => item.artists[0]?.name).filter(Boolean))] as string[];
   genreMap = await resolveArtistGenres(uniqueArtists, genreMap);
 
-  return data.items.map((item: any) => ({
+  return data.items.map((item) => ({
     id: item.id,
     track: item.name,
     artist: item.artists[0]?.name || 'Unknown Artist',
-    genre: genreMap[item.artists[0]?.name] || 'Electronic',
+    genre: genreMap[item.artists[0]?.name] || 'Unknown', // R-04: Do not default unknown artists to Electronic
     bpm: null,
     spotifyUrl: item.external_urls?.spotify,
     album: item.album?.name,

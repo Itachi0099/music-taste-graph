@@ -1,12 +1,8 @@
 import React, { useRef, useEffect, useState, useCallback, useMemo } from 'react';
 import type { 
-  UniverseGenreSystem, 
-  UniverseArtist, 
-  UniverseTrack, 
-  UniverseSubgenre, 
   CelestialUniverseData,
-  CelestialDiscoverySystem,
-  DiscoveryCategory 
+  DiscoveryCategory,
+  UniverseSelection,
 } from '../../types';
 import { ZoomIn, ZoomOut, RotateCcw, Compass, ExternalLink, Sparkles, Zap, Plus, Check } from 'lucide-react';
 import { getCelestialGenreColor } from '../../utils/celestialColors';
@@ -22,17 +18,10 @@ import {
   renderAsteroid,
   renderMeteor,
 } from '../../utils/celestialMaterials';
-import type { UniverseAsteroid, UniverseMeteor } from '../../types';
+import { screenToWorld, calculateHyperspaceEase, hitTestUniverse } from './celestialMath';
+import { computeSearchMatches } from './celestialSearch';
 
-export type UniverseSelection = 
-  | { type: 'genre'; item: UniverseGenreSystem }
-  | { type: 'subgenre'; item: UniverseSubgenre }
-  | { type: 'artist'; item: UniverseArtist }
-  | { type: 'track'; item: UniverseTrack }
-  | { type: 'discovery'; item: CelestialDiscoverySystem }
-  | { type: 'asteroid'; item: UniverseAsteroid }
-  | { type: 'meteor'; item: UniverseMeteor }
-  | null;
+export type { UniverseSelection };
 
 interface CelestialUniverseCanvasProps {
   universeData: CelestialUniverseData;
@@ -85,7 +74,10 @@ export const CelestialUniverseCanvas: React.FC<CelestialUniverseCanvasProps> = (
   // Hover state
   const [hoveredEntity, setHoveredEntity] = useState<UniverseSelection>(null);
   const hoveredRef = useRef<UniverseSelection>(null);
-  hoveredRef.current = hoveredEntity;
+
+  useEffect(() => {
+    hoveredRef.current = hoveredEntity;
+  }, [hoveredEntity]);
 
   // Real-time animation frame timestamp
   const animTimeRef = useRef(0);
@@ -172,45 +164,10 @@ export const CelestialUniverseCanvas: React.FC<CelestialUniverseCanvasProps> = (
   }, []);
 
   // Pre-filter matches based on search query
-  const searchMatches = useMemo(() => {
-    if (!searchQuery.trim()) return null;
-    const q = searchQuery.toLowerCase().trim();
-    const matchedGenreIds = new Set<string>();
-    const matchedArtistIds = new Set<string>();
-    const matchedTrackIds = new Set<string>();
-    const matchedDiscoveryIds = new Set<string>();
-
-    universeData.genres.forEach((g) => {
-      if (g.name.toLowerCase().includes(q)) matchedGenreIds.add(g.id);
-      g.subgenres.forEach((s) => {
-        if (s.name.toLowerCase().includes(q)) matchedGenreIds.add(g.id);
-      });
-    });
-
-    universeData.artists.forEach((a) => {
-      if (a.name.toLowerCase().includes(q) || a.primaryGenre.toLowerCase().includes(q)) {
-        matchedArtistIds.add(a.id);
-      }
-      a.tracks.forEach((t) => {
-        if (t.title.toLowerCase().includes(q) || t.album?.toLowerCase().includes(q)) {
-          matchedTrackIds.add(t.id);
-          matchedArtistIds.add(a.id);
-        }
-      });
-    });
-
-    universeData.discoveries?.forEach((d) => {
-      if (
-        d.recommendation.artist.toLowerCase().includes(q) ||
-        d.recommendation.genre.toLowerCase().includes(q) ||
-        d.recommendation.subgenre?.toLowerCase().includes(q)
-      ) {
-        matchedDiscoveryIds.add(d.id);
-      }
-    });
-
-    return { genres: matchedGenreIds, artists: matchedArtistIds, tracks: matchedTrackIds, discoveries: matchedDiscoveryIds };
-  }, [universeData, searchQuery]);
+  const searchMatches = useMemo(
+    () => computeSearchMatches(universeData, searchQuery),
+    [universeData, searchQuery]
+  );
 
   // Handle focus transition when selection changes with Hyperspace travel
   useEffect(() => {
@@ -244,14 +201,6 @@ export const CelestialUniverseCanvas: React.FC<CelestialUniverseCanvasProps> = (
     cameraRef.current.targetZoom = next;
   };
 
-  // Convert screen coordinates to celestial world coordinates
-  const screenToWorld = useCallback((screenX: number, screenY: number, width: number, height: number) => {
-    const cam = cameraRef.current;
-    const wx = (screenX - width / 2) / cam.zoom + cam.x;
-    const wy = (screenY - height / 2) / cam.zoom + cam.y;
-    return { x: wx, y: wy };
-  }, []);
-
   // Main Canvas Render Loop
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -281,6 +230,7 @@ export const CelestialUniverseCanvas: React.FC<CelestialUniverseCanvasProps> = (
 
       const cam = cameraRef.current;
       const hyper = hyperspaceRef.current;
+      const currentHover = hoveredRef.current;
 
       // ============================================================
       // HYPERSPACE TRAVEL MOTION CALCULATION
@@ -292,10 +242,7 @@ export const CelestialUniverseCanvas: React.FC<CelestialUniverseCanvasProps> = (
         hyper.progress = rawProgress;
 
         // Smooth sigmoidal acceleration & deceleration curve (ease-in-out)
-        // t < 0.5: acceleration; t >= 0.5: deceleration
-        const easeT = rawProgress < 0.5
-          ? 4 * rawProgress * rawProgress * rawProgress
-          : 1 - Math.pow(-2 * rawProgress + 2, 3) / 2;
+        const easeT = calculateHyperspaceEase(rawProgress);
 
         // Peak speed occurs in the middle (t = 0.5)
         hyperspaceSpeedFactor = Math.sin(rawProgress * Math.PI);
@@ -434,7 +381,7 @@ export const CelestialUniverseCanvas: React.FC<CelestialUniverseCanvasProps> = (
       // 4. Render Genre Systems (Luminous Celestial Cores & Orbiting Subgenres)
       universeData.genres.forEach((genre) => {
         const isGenreSelected = selection?.type === 'genre' && selection.item.id === genre.id;
-        const isGenreHovered = hoveredEntity?.type === 'genre' && hoveredEntity.item.id === genre.id;
+        const isGenreHovered = currentHover?.type === 'genre' && currentHover.item.id === genre.id;
         const isAnySelected = selection !== null;
         const isDimmed = isAnySelected && !isGenreSelected && 
           !(selection?.type === 'artist' && (selection.item.primaryGenre === genre.name || selection.item.bridgeGenre === genre.name)) &&
@@ -499,7 +446,7 @@ export const CelestialUniverseCanvas: React.FC<CelestialUniverseCanvasProps> = (
             sub.y = py;
 
             const isSubSelected = selection?.type === 'subgenre' && selection.item.id === sub.id;
-            const isSubHovered = hoveredEntity?.type === 'subgenre' && hoveredEntity.item.id === sub.id;
+            const isSubHovered = currentHover?.type === 'subgenre' && currentHover.item.id === sub.id;
             const subRadius = sub.tier === 'planet' ? 5.5 : 3.5;
 
             // Small celestial body for subgenre
@@ -537,7 +484,7 @@ export const CelestialUniverseCanvas: React.FC<CelestialUniverseCanvasProps> = (
       if (activeLevel >= 2 || viewFilter === 'artists' || viewFilter === 'tracks') {
         universeData.artists.forEach((artist) => {
           const isArtistSelected = selection?.type === 'artist' && selection.item.id === artist.id;
-          const isArtistHovered = hoveredEntity?.type === 'artist' && hoveredEntity.item.id === artist.id;
+          const isArtistHovered = currentHover?.type === 'artist' && currentHover.item.id === artist.id;
           const isParentGenreSelected = selection?.type === 'genre' && selection.item.name === artist.primaryGenre;
           const isDimmed = selection !== null && !isArtistSelected && !isParentGenreSelected &&
             !(selection?.type === 'track' && selection.item.artist === artist.name);
@@ -618,7 +565,7 @@ export const CelestialUniverseCanvas: React.FC<CelestialUniverseCanvasProps> = (
               track.y = ty;
 
               const isTrackSelected = selection?.type === 'track' && selection.item.id === track.id;
-              const isTrackHovered = hoveredEntity?.type === 'track' && hoveredEntity.item.id === track.id;
+              const isTrackHovered = currentHover?.type === 'track' && currentHover.item.id === track.id;
               const isTrackDimmed = selection !== null && !isTrackSelected && !(selection?.type === 'artist' && selection.item.id === artist.id);
               const trackSearchMatch = searchMatches ? searchMatches.tracks.has(track.id) : true;
               const finalTrackDim = isTrackDimmed || (!trackSearchMatch && searchMatches !== null);
@@ -661,7 +608,7 @@ export const CelestialUniverseCanvas: React.FC<CelestialUniverseCanvasProps> = (
           }
 
           const isDiscSelected = selection?.type === 'discovery' && selection.item.id === disc.id;
-          const isDiscHovered = hoveredEntity?.type === 'discovery' && hoveredEntity.item.id === disc.id;
+          const isDiscHovered = currentHover?.type === 'discovery' && currentHover.item.id === disc.id;
           const isDimmed = selection !== null && !isDiscSelected;
           const searchMatch = searchMatches ? searchMatches.discoveries.has(disc.id) : true;
           const finalDim = isDimmed || (!searchMatch && searchMatches !== null);
@@ -724,7 +671,7 @@ export const CelestialUniverseCanvas: React.FC<CelestialUniverseCanvasProps> = (
       if (universeData.asteroids && universeData.asteroids.length > 0) {
         universeData.asteroids.forEach((ast) => {
           const isAstSelected = selection?.type === 'asteroid' && selection.item.id === ast.id;
-          const isAstHovered = hoveredEntity?.type === 'asteroid' && hoveredEntity.item.id === ast.id;
+          const isAstHovered = currentHover?.type === 'asteroid' && currentHover.item.id === ast.id;
           const isParentGenreSelected = selection?.type === 'genre' && selection.item.name === ast.parentGenre;
           const isDimmed = selection !== null && !isAstSelected && !isParentGenreSelected;
 
@@ -775,7 +722,7 @@ export const CelestialUniverseCanvas: React.FC<CelestialUniverseCanvasProps> = (
       if (universeData.meteors && universeData.meteors.length > 0) {
         universeData.meteors.forEach((meteor) => {
           const isMeteorSelected = selection?.type === 'meteor' && selection.item.id === meteor.id;
-          const isMeteorHovered = hoveredEntity?.type === 'meteor' && hoveredEntity.item.id === meteor.id;
+          const isMeteorHovered = currentHover?.type === 'meteor' && currentHover.item.id === meteor.id;
 
           // Advance meteor progress along trajectory (paused on hover so user can easily interact)
           if (!isMeteorHovered && !isMeteorSelected) {
@@ -878,97 +825,19 @@ export const CelestialUniverseCanvas: React.FC<CelestialUniverseCanvasProps> = (
       const rect = canvas.getBoundingClientRect();
       const mouseX = e.clientX - rect.left;
       const mouseY = e.clientY - rect.top;
-      const worldPos = screenToWorld(mouseX, mouseY, width, height);
+      const worldPos = screenToWorld(mouseX, mouseY, width, height, cameraRef.current);
 
-      // Hit test meteors first (active dynamic objects)
-      if (universeData.meteors) {
-        for (const meteor of universeData.meteors) {
-          const dist = Math.hypot(meteor.currentX - worldPos.x, meteor.currentY - worldPos.y);
-          if (dist <= 14) {
-            setHoveredEntity({ type: 'meteor', item: meteor });
-            canvas.style.cursor = 'pointer';
-            return;
-          }
-        }
-      }
+      const hit = hitTestUniverse(
+        worldPos,
+        universeData,
+        currentZoomLevel,
+        selection,
+        discoveryFilter,
+        0
+      );
 
-      // Hit test asteroids (density belts & peripheral discoveries)
-      if (universeData.asteroids) {
-        for (const ast of universeData.asteroids) {
-          const dist = Math.hypot(ast.x - worldPos.x, ast.y - worldPos.y);
-          if (dist <= ast.radius + 10) {
-            setHoveredEntity({ type: 'asteroid', item: ast });
-            canvas.style.cursor = 'pointer';
-            return;
-          }
-        }
-      }
-
-      // Hit test discovery systems first
-      if (universeData.discoveries) {
-        for (const disc of universeData.discoveries) {
-          if (discoveryFilter !== 'all' && disc.recommendation.category !== discoveryFilter) continue;
-          const dist = Math.hypot(disc.x - worldPos.x, disc.y - worldPos.y);
-          if (dist <= disc.radius + 14) {
-            setHoveredEntity({ type: 'discovery', item: disc });
-            canvas.style.cursor = 'pointer';
-            return;
-          }
-        }
-      }
-
-      // Hit test songs first (if visible)
-      if (currentZoomLevel >= 3 || selection?.type === 'artist') {
-        for (const artist of universeData.artists) {
-          for (const track of artist.tracks) {
-            const dist = Math.hypot(track.x - worldPos.x, track.y - worldPos.y);
-            if (dist <= 12) {
-              setHoveredEntity({ type: 'track', item: track });
-              canvas.style.cursor = 'pointer';
-              return;
-            }
-          }
-        }
-      }
-
-      // Hit test artists
-      if (currentZoomLevel >= 2) {
-        for (const artist of universeData.artists) {
-          const dist = Math.hypot(artist.x - worldPos.x, artist.y - worldPos.y);
-          if (dist <= artist.radius + 10) {
-            setHoveredEntity({ type: 'artist', item: artist });
-            canvas.style.cursor = 'pointer';
-            return;
-          }
-        }
-      }
-
-      // Hit test subgenres
-      if (currentZoomLevel >= 2) {
-        for (const genre of universeData.genres) {
-          for (const sub of genre.subgenres) {
-            const dist = Math.hypot(sub.x - worldPos.x, sub.y - worldPos.y);
-            if (dist <= 12) {
-              setHoveredEntity({ type: 'subgenre', item: sub });
-              canvas.style.cursor = 'pointer';
-              return;
-            }
-          }
-        }
-      }
-
-      // Hit test major genres (suns)
-      for (const genre of universeData.genres) {
-        const dist = Math.hypot(genre.x - worldPos.x, genre.y - worldPos.y);
-        if (dist <= genre.radius + 12) {
-          setHoveredEntity({ type: 'genre', item: genre });
-          canvas.style.cursor = 'pointer';
-          return;
-        }
-      }
-
-      setHoveredEntity(null);
-      canvas.style.cursor = 'grab';
+      setHoveredEntity(hit);
+      canvas.style.cursor = hit ? 'pointer' : 'grab';
     }
   };
 
@@ -981,82 +850,18 @@ export const CelestialUniverseCanvas: React.FC<CelestialUniverseCanvasProps> = (
     const rect = canvas.getBoundingClientRect();
     const mouseX = e.clientX - rect.left;
     const mouseY = e.clientY - rect.top;
-    const worldPos = screenToWorld(mouseX, mouseY, canvas.clientWidth, canvas.clientHeight);
+    const worldPos = screenToWorld(mouseX, mouseY, canvas.clientWidth, canvas.clientHeight, cameraRef.current);
 
-    // Hit test priority: Meteors -> Asteroids -> Discoveries -> Tracks -> Artists -> Subgenres -> Genres
-    if (universeData.meteors) {
-      for (const meteor of universeData.meteors) {
-        const dist = Math.hypot(meteor.currentX - worldPos.x, meteor.currentY - worldPos.y);
-        if (dist <= 16) {
-          onSelect({ type: 'meteor', item: meteor });
-          return;
-        }
-      }
-    }
+    const hit = hitTestUniverse(
+      worldPos,
+      universeData,
+      currentZoomLevel,
+      selection,
+      discoveryFilter,
+      2
+    );
 
-    if (universeData.asteroids) {
-      for (const ast of universeData.asteroids) {
-        const dist = Math.hypot(ast.x - worldPos.x, ast.y - worldPos.y);
-        if (dist <= ast.radius + 12) {
-          onSelect({ type: 'asteroid', item: ast });
-          return;
-        }
-      }
-    }
-
-    if (universeData.discoveries) {
-      for (const disc of universeData.discoveries) {
-        if (discoveryFilter !== 'all' && disc.recommendation.category !== discoveryFilter) continue;
-        const dist = Math.hypot(disc.x - worldPos.x, disc.y - worldPos.y);
-        if (dist <= disc.radius + 16) {
-          onSelect({ type: 'discovery', item: disc });
-          return;
-        }
-      }
-    }
-
-    if (currentZoomLevel >= 3 || selection?.type === 'artist') {
-      for (const artist of universeData.artists) {
-        for (const track of artist.tracks) {
-          const dist = Math.hypot(track.x - worldPos.x, track.y - worldPos.y);
-          if (dist <= 14) {
-            onSelect({ type: 'track', item: track });
-            return;
-          }
-        }
-      }
-    }
-
-    if (currentZoomLevel >= 2) {
-      for (const artist of universeData.artists) {
-        const dist = Math.hypot(artist.x - worldPos.x, artist.y - worldPos.y);
-        if (dist <= artist.radius + 12) {
-          onSelect({ type: 'artist', item: artist });
-          return;
-        }
-      }
-
-      for (const genre of universeData.genres) {
-        for (const sub of genre.subgenres) {
-          const dist = Math.hypot(sub.x - worldPos.x, sub.y - worldPos.y);
-          if (dist <= 14) {
-            onSelect({ type: 'subgenre', item: sub });
-            return;
-          }
-        }
-      }
-    }
-
-    for (const genre of universeData.genres) {
-      const dist = Math.hypot(genre.x - worldPos.x, genre.y - worldPos.y);
-      if (dist <= genre.radius + 15) {
-        onSelect({ type: 'genre', item: genre });
-        return;
-      }
-    }
-
-    // Clicked empty space: reset selection
-    onSelect(null);
+    onSelect(hit);
   };
 
   const handleWheel = (e: React.WheelEvent<HTMLCanvasElement>) => {

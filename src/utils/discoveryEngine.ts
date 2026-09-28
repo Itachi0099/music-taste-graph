@@ -267,8 +267,8 @@ export function scoreCandidateDeterministic(
   const genreScore = Math.min(1.0, primaryGenreWeight * 2.4 + relatedBonus);
 
   // 2. Artist similarity / cross-affinity (30%)
-  const highAffinityArtistsInGenre = Object.entries(tasteProfile.artistAffinity).filter(
-    ([_, aff]) => aff > 0.4
+  const highAffinityArtistsInGenre = Object.values(tasteProfile.artistAffinity).filter(
+    (aff) => aff > 0.4
   );
   const artistScore = primaryGenreWeight > 0.15 ? 0.85 : sharedRelatedGenres.length > 0 ? 0.6 : 0.3;
 
