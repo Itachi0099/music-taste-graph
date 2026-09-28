@@ -1,1 +1,3 @@
-export { app, default } from '../api/app';
+import { app } from '../api/index';
+export { app };
+export default app;
