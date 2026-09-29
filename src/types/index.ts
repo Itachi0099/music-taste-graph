@@ -235,6 +235,28 @@ export interface UniverseArtist {
   bridgeGenre?: string;
   celestialColor?: import('../utils/celestialColors').CelestialColorIdentity;
   isCurrentlyPlaying?: boolean;
+  // Planetary orbital mechanics
+  orbitRadius?: number;
+  orbitAngle?: number;
+  orbitSpeed?: number;
+  baseX?: number;
+  baseY?: number;
+  parentSubgenre?: string;
+  tasteImportance?: number; // 0.0 - 1.0 importance in user taste
+  recencyFactor?: number;   // 0.0 - 1.0 listening activity/recency
+  isBridge?: boolean;
+  bridgeSaddle?: {
+    saddleX: number;
+    saddleY: number;
+    axisX: number;
+    axisY: number;
+    perpX: number;
+    perpY: number;
+    semiMajor: number;
+    semiMinor: number;
+    orbitSpeed: number;
+    initialAngle: number;
+  };
 }
 
 export interface UniverseTrack {

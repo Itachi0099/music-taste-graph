@@ -24,27 +24,27 @@ export const InsightsModal: React.FC<InsightsModalProps> = ({
   const concentrationPercent = profile ? Math.round(profile.artistConcentration * 100) : 40;
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-md flex items-center justify-center p-4">
-      <div className="w-full max-w-2xl bg-[var(--bg-primary)] border border-[var(--border-primary)] rounded-2xl shadow-2xl p-7 text-[var(--text-primary)] animate-in fade-in zoom-in-95 duration-150 max-h-[88vh] overflow-y-auto">
+    <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+      <div className="w-full max-w-2xl bg-[var(--bg-primary)] border border-[var(--border-primary)] rounded-xl shadow-xl p-6 text-[var(--text-primary)] animate-in fade-in zoom-in-95 duration-150 max-h-[88vh] overflow-y-auto">
         {/* Header */}
-        <div className="flex items-start justify-between pb-5 border-b border-[var(--border-subtle)]">
+        <div className="flex items-start justify-between pb-4 border-b border-[var(--border-subtle)]">
           <div>
             <div className="flex items-center gap-2">
               <span className="text-[10px] font-mono uppercase tracking-widest text-[var(--text-muted)]">
-                Personal Taste Profile & Observatory
+                Taste Profile & Library Analytics
               </span>
               <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
             </div>
-            <h2 className="font-serif text-3xl font-bold tracking-tight mt-1 text-[var(--text-primary)]">
+            <h2 className="font-serif text-2xl font-bold tracking-tight mt-1 text-[var(--text-primary)]">
               {summary.tastePersona || 'Eclectic Explorer'}
             </h2>
             <p className="text-xs text-[var(--text-tertiary)] mt-1 font-mono">
-              {summary.totalTracks} tracks · {summary.totalArtists} artists · {summary.totalGenres} stellar systems
+              {summary.totalTracks} tracks · {summary.totalArtists} artists · {summary.totalGenres} genres
             </p>
           </div>
           <button 
             onClick={onClose}
-            className="p-1.5 rounded-lg text-[var(--text-tertiary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-surface)] transition-colors"
+            className="p-1.5 rounded-md text-[var(--text-tertiary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-surface)] transition-colors"
           >
             <X size={18} />
           </button>
@@ -55,10 +55,10 @@ export const InsightsModal: React.FC<InsightsModalProps> = ({
           <div>
             <h3 className="text-xs font-mono uppercase tracking-wider text-[var(--text-muted)] mb-3 flex items-center gap-1.5">
               <Compass size={13} />
-              <span>What Kind of Listener Are You?</span>
+              <span>Listening Profile & Dynamics</span>
             </h3>
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-              <div className="p-3.5 rounded-xl bg-[var(--bg-surface)] border border-[var(--border-subtle)]">
+              <div className="p-3.5 rounded-lg bg-[var(--bg-surface)] border border-[var(--border-subtle)]">
                 <div className="flex items-center justify-between text-xs mb-1">
                   <span className="font-medium text-[var(--text-primary)]">Exploration</span>
                   <span className="font-mono text-amber-400 text-[11px]">{explorationPercent}%</span>
@@ -68,12 +68,12 @@ export const InsightsModal: React.FC<InsightsModalProps> = ({
                 </div>
                 <p className="text-[10.5px] text-[var(--text-tertiary)] leading-snug">
                   {explorationPercent > 70 
-                    ? 'Cosmic voyager: frequently ventures outside familiar stellar systems.' 
-                    : 'Orbit loyalist: prefers deepening ties with core musical suns.'}
+                    ? 'High novelty: frequently listens outside dominant genres.' 
+                    : 'Focused listening: high concentration in primary genre systems.'}
                 </p>
               </div>
 
-              <div className="p-3.5 rounded-xl bg-[var(--bg-surface)] border border-[var(--border-subtle)]">
+              <div className="p-3.5 rounded-lg bg-[var(--bg-surface)] border border-[var(--border-subtle)]">
                 <div className="flex items-center justify-between text-xs mb-1">
                   <span className="font-medium text-[var(--text-primary)]">Genre Diversity</span>
                   <span className="font-mono text-cyan-400 text-[11px]">{diversityPercent}%</span>
@@ -83,12 +83,12 @@ export const InsightsModal: React.FC<InsightsModalProps> = ({
                 </div>
                 <p className="text-[10.5px] text-[var(--text-tertiary)] leading-snug">
                   {diversityPercent > 65
-                    ? 'High entropy: spans multiple distinct galactic clusters simultaneously.'
-                    : 'Focused gravitational pull: centered around a few primary genres.'}
+                    ? 'High entropy: broad distribution across multiple distinct styles.'
+                    : 'Consolidated: listening centered within core genre clusters.'}
                 </p>
               </div>
 
-              <div className="p-3.5 rounded-xl bg-[var(--bg-surface)] border border-[var(--border-subtle)]">
+              <div className="p-3.5 rounded-lg bg-[var(--bg-surface)] border border-[var(--border-subtle)]">
                 <div className="flex items-center justify-between text-xs mb-1">
                   <span className="font-medium text-[var(--text-primary)]">Artist Concentration</span>
                   <span className="font-mono text-purple-400 text-[11px]">{concentrationPercent}%</span>
@@ -98,8 +98,8 @@ export const InsightsModal: React.FC<InsightsModalProps> = ({
                 </div>
                 <p className="text-[10.5px] text-[var(--text-tertiary)] leading-snug">
                   {concentrationPercent > 50
-                    ? 'Heavy artist affinity: clusters repeatedly around key stars.'
-                    : 'Distributed catalog: broad listening across many individual stars.'}
+                    ? 'High artist affinity: repeated listening concentrated around key artists.'
+                    : 'Distributed catalog: balanced listening across many artists.'}
                 </p>
               </div>
             </div>
@@ -109,7 +109,7 @@ export const InsightsModal: React.FC<InsightsModalProps> = ({
           <div>
             <h3 className="text-xs font-mono uppercase tracking-wider text-[var(--text-muted)] mb-3 flex items-center gap-1.5">
               <Disc size={13} />
-              <span>Stellar Gravity & Dominant Genres</span>
+              <span>Genre Distribution & Weight</span>
             </h3>
             <div className="space-y-2">
               {summary.topGenres.map(g => {
@@ -137,22 +137,22 @@ export const InsightsModal: React.FC<InsightsModalProps> = ({
             <div>
               <h3 className="text-xs font-mono uppercase tracking-wider text-[var(--text-muted)] mb-3 flex items-center gap-1.5">
                 <Activity size={13} />
-                <span>Audio Profile & Velocity</span>
+                <span>Acoustic Attributes</span>
               </h3>
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
-                <div className="p-3 bg-[var(--bg-surface)] rounded-xl border border-[var(--border-subtle)] text-center">
+                <div className="p-3 bg-[var(--bg-surface)] rounded-lg border border-[var(--border-subtle)] text-center">
                   <span className="text-[10px] font-mono text-[var(--text-muted)] uppercase block mb-1">Energy</span>
                   <span className="font-serif text-xl font-semibold text-[var(--text-primary)]">{profile.energyProfile}%</span>
                 </div>
-                <div className="p-3 bg-[var(--bg-surface)] rounded-xl border border-[var(--border-subtle)] text-center">
+                <div className="p-3 bg-[var(--bg-surface)] rounded-lg border border-[var(--border-subtle)] text-center">
                   <span className="text-[10px] font-mono text-[var(--text-muted)] uppercase block mb-1">Groove</span>
                   <span className="font-serif text-xl font-semibold text-[var(--text-primary)]">{profile.grooveProfile}%</span>
                 </div>
-                <div className="p-3 bg-[var(--bg-surface)] rounded-xl border border-[var(--border-subtle)] text-center">
+                <div className="p-3 bg-[var(--bg-surface)] rounded-lg border border-[var(--border-subtle)] text-center">
                   <span className="text-[10px] font-mono text-[var(--text-muted)] uppercase block mb-1">Chill</span>
                   <span className="font-serif text-xl font-semibold text-[var(--text-primary)]">{profile.chillProfile}%</span>
                 </div>
-                <div className="p-3 bg-[var(--bg-surface)] rounded-xl border border-[var(--border-subtle)] text-center">
+                <div className="p-3 bg-[var(--bg-surface)] rounded-lg border border-[var(--border-subtle)] text-center">
                   <span className="text-[10px] font-mono text-[var(--text-muted)] uppercase block mb-1">Preferred BPM</span>
                   <span className="font-serif text-xl font-semibold text-[var(--text-primary)]">{profile.bpmRange.preferred}</span>
                 </div>
@@ -188,9 +188,9 @@ export const InsightsModal: React.FC<InsightsModalProps> = ({
           </span>
           <button
             onClick={onClose}
-            className="px-4 py-2 rounded-lg bg-[var(--text-primary)] text-[var(--bg-primary)] text-xs font-medium hover:opacity-90 transition-opacity"
+            className="px-4 py-2 rounded-md bg-[var(--text-primary)] text-[var(--bg-primary)] text-xs font-medium hover:opacity-90 transition-opacity"
           >
-            Close Observatory
+            Close
           </button>
         </div>
       </div>

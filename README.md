@@ -12,13 +12,12 @@ An interactive, high-performance deep-space visualization of personal music tast
 
 ## 🌟 Overview
 
-**Music Taste Graph** reimagines personal listening data as a living, breathing celestial universe. Instead of conventional flat graphs or cluttered futuristic dashboards, it models genres as stellar systems, artists as orbiting planetary bodies, and tracks as luminous satellites.
+**Celestial Music Universe** maps a user's music library into an interactive spatial model. Genres form primary systems, artists occupy local positions within those systems, and individual tracks resolve at higher zoom levels. Listening events and recommendation candidates are rendered as dynamic spatial objects:
 
-The system incorporates **functional celestial bodies**:
-- **Genre Systems (Stellar Cores):** Luminous celestial suns with soft coronas, natural atmospheric falloff, and color identities derived from musical taxonomy.
-- **Discovery Systems (Stellar Nurseries):** Recommendation candidates positioned spatially relative to existing taste affinity.
-- **Asteroids (Discovery Objects):** Irregular faceted bodies representing peripheral tracks, underground artists, and cross-genre bridges.
-- **Meteors (Active Music Events):** Real-time dynamic events tracing flight trajectories across the universe (incoming recommendations, recently played tracks, cross-genre transitions).
+- **Genre Systems:** Primary stellar cores with atmospheric falloff and color identities mapped to musical taxonomy.
+- **Discovery Systems:** Contextual recommendation candidates positioned spatially by taste affinity and acoustic similarity.
+- **Asteroid Belts:** Niche tracks, peripheral catalog items, and cross-genre bridges clustered by library density.
+- **Dynamic Meteors:** Active listening events and incoming discovery recommendations traced along physics-based flight paths.
 
 ---
 

@@ -8,7 +8,8 @@ import type {
   SpotifyTokenEndpointResponse,
 } from '../types/spotify';
 
-const CLIENT_ID = import.meta.env.VITE_SPOTIFY_CLIENT_ID;
+const DEFAULT_CLIENT_ID = '663e5f2a2950473ba037426e5343b8df';
+const CLIENT_ID = import.meta.env.VITE_SPOTIFY_CLIENT_ID || DEFAULT_CLIENT_ID;
 
 export const SPOTIFY_REDIRECT_URI =
   import.meta.env.VITE_SPOTIFY_REDIRECT_URI ||
@@ -17,6 +18,21 @@ export const SPOTIFY_REDIRECT_URI =
     : 'http://127.0.0.1:5173/');
 
 export const getRedirectUri = (): string => {
+  if (import.meta.env.VITE_SPOTIFY_REDIRECT_URI) {
+    return import.meta.env.VITE_SPOTIFY_REDIRECT_URI;
+  }
+  if (typeof window !== 'undefined' && window.location) {
+    const origin = window.location.origin;
+    if (origin.includes('localhost:5173')) {
+      return 'http://localhost:5173/';
+    }
+    if (origin.includes('127.0.0.1:5173')) {
+      return 'http://127.0.0.1:5173/';
+    }
+    if (origin.includes('vercel.app')) {
+      return 'https://music-taste-graph.vercel.app/';
+    }
+  }
   return SPOTIFY_REDIRECT_URI;
 };
 
@@ -53,18 +69,14 @@ export const loginWithSpotify = async () => {
   const codeChallenge = await generateCodeChallenge(codeVerifier);
   const redirectUri = getRedirectUri();
 
-  // Store codeVerifier temporarily only in sessionStorage for the duration of the redirect
-  sessionStorage.setItem('spotify_code_verifier', codeVerifier);
-  sessionStorage.setItem('spotify_redirect_uri', redirectUri);
-
-  // Clean any old localStorage tokens
+  // Store codeVerifier in both sessionStorage and localStorage for redirect recovery across browsers
   try {
-    localStorage.removeItem('spotify_code_verifier');
-    localStorage.removeItem('spotify_redirect_uri');
-    localStorage.removeItem('spotify_access_token');
-    localStorage.removeItem('spotify_refresh_token');
+    sessionStorage.setItem('spotify_code_verifier', codeVerifier);
+    sessionStorage.setItem('spotify_redirect_uri', redirectUri);
+    localStorage.setItem('spotify_code_verifier', codeVerifier);
+    localStorage.setItem('spotify_redirect_uri', redirectUri);
   } catch {
-    // Ignore storage errors in restricted contexts
+    // Storage access may be restricted
   }
 
   const params = new URLSearchParams({
@@ -205,11 +217,22 @@ export const getSpotifyToken = async (): Promise<string | null> => {
   // Handle OAuth code callback
   window.history.replaceState(null, '', window.location.pathname);
 
-  const verifier = sessionStorage.getItem('spotify_code_verifier');
-  const redirectUri = sessionStorage.getItem('spotify_redirect_uri') || getRedirectUri();
+  const verifier =
+    sessionStorage.getItem('spotify_code_verifier') ||
+    localStorage.getItem('spotify_code_verifier');
+  const redirectUri =
+    sessionStorage.getItem('spotify_redirect_uri') ||
+    localStorage.getItem('spotify_redirect_uri') ||
+    getRedirectUri();
 
-  sessionStorage.removeItem('spotify_code_verifier');
-  sessionStorage.removeItem('spotify_redirect_uri');
+  try {
+    sessionStorage.removeItem('spotify_code_verifier');
+    sessionStorage.removeItem('spotify_redirect_uri');
+    localStorage.removeItem('spotify_code_verifier');
+    localStorage.removeItem('spotify_redirect_uri');
+  } catch {
+    // Storage access may be restricted
+  }
 
   if (!verifier) {
     const existing = getStoredSpotifyToken();
@@ -219,21 +242,52 @@ export const getSpotifyToken = async (): Promise<string | null> => {
 
   tokenExchangePromise = (async () => {
     try {
-      const backendResponse = await fetch('/api/auth/spotify/token', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify({ code, code_verifier: verifier, redirect_uri: redirectUri }),
-      });
+      let data: SpotifyTokenEndpointResponse | null = null;
+      try {
+        const backendResponse = await fetch('/api/auth/spotify/token', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({ code, code_verifier: verifier, redirect_uri: redirectUri }),
+        });
 
-      if (!backendResponse.ok) {
-        const errorData = await backendResponse.json().catch(() => ({}));
-        throw new Error(errorData.error || 'Failed to exchange authorization code');
+        if (backendResponse.ok) {
+          data = await backendResponse.json();
+        }
+      } catch (backendErr) {
+        console.warn('Backend token exchange route unavailable, falling back to direct PKCE:', backendErr);
       }
 
-      const data: SpotifyTokenEndpointResponse = await backendResponse.json();
-      saveTokens(data.access_token, data.expires_in);
-      return data.access_token;
+      // If backend token exchange route is unavailable (e.g. dev server without server process), fallback to direct Spotify PKCE
+      if (!data?.access_token) {
+        const params = new URLSearchParams({
+          grant_type: 'authorization_code',
+          code,
+          redirect_uri: redirectUri,
+          client_id: CLIENT_ID,
+          code_verifier: verifier,
+        });
+
+        const spotifyRes = await fetch('https://accounts.spotify.com/api/token', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: params.toString(),
+        });
+
+        if (!spotifyRes.ok) {
+          const errorData = await spotifyRes.json().catch(() => ({}));
+          throw new Error(errorData.error_description || errorData.error || 'Failed to exchange authorization code');
+        }
+
+        data = await spotifyRes.json();
+      }
+
+      if (data?.access_token) {
+        saveTokens(data.access_token, data.expires_in);
+        return data.access_token;
+      }
+
+      throw new Error('No access token returned from Spotify authentication');
     } finally {
       tokenExchangePromise = null;
     }

@@ -35,6 +35,9 @@ interface CelestialUniverseCanvasProps {
   isDark?: boolean;
 }
 
+const FONT_SANS = '"Plus Jakarta Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+const FONT_MONO = '"JetBrains Mono", monospace';
+
 export const CelestialUniverseCanvas: React.FC<CelestialUniverseCanvasProps> = ({
   universeData,
   selection,
@@ -172,6 +175,7 @@ export const CelestialUniverseCanvas: React.FC<CelestialUniverseCanvasProps> = (
   // Handle focus transition when selection changes with Hyperspace travel
   useEffect(() => {
     if (!selection) return;
+    hasMovedRef.current = false;
 
     if (selection.type === 'genre') {
       triggerHyperspaceTravel(selection.item.x, selection.item.y, 1.15, selection.item.name);
@@ -264,6 +268,17 @@ export const CelestialUniverseCanvas: React.FC<CelestialUniverseCanvasProps> = (
           setHyperspaceDisplay({ active: false, destName: '' });
         }
       } else {
+        // If an artist or track is selected and user hasn't panned away, smoothly track its planetary position
+        if (!isDraggingRef.current && !hasMovedRef.current) {
+          if (selection?.type === 'artist') {
+            cam.targetX = selection.item.x;
+            cam.targetY = selection.item.y;
+          } else if (selection?.type === 'track') {
+            cam.targetX = selection.item.x;
+            cam.targetY = selection.item.y;
+          }
+        }
+
         // Standard smooth camera interpolation (ease-out lerp)
         cam.x += (cam.targetX - cam.x) * 0.085;
         cam.y += (cam.targetY - cam.y) * 0.085;
@@ -341,6 +356,36 @@ export const CelestialUniverseCanvas: React.FC<CelestialUniverseCanvasProps> = (
       ctx.scale(cam.zoom, cam.zoom);
       ctx.translate(-cam.x, -cam.y);
 
+      // Advance planetary orbits for Artists and their satellite Tracks
+      universeData.artists.forEach((artist) => {
+        const isArtistHovered = currentHover?.type === 'artist' && currentHover.item.id === artist.id;
+        const isArtistSelected = selection?.type === 'artist' && selection.item.id === artist.id;
+        // Motion damping on hover/select allows effortless reading and inspection
+        const motionDamp = isArtistHovered ? 0.2 : isArtistSelected ? 0.35 : 1.0;
+
+        if (artist.isBridge && artist.bridgeSaddle) {
+          // Cross-genre bridge artist: orbital motion along gravitational saddle between Genre A & B
+          const s = artist.bridgeSaddle;
+          const currentAngle = s.initialAngle + time * s.orbitSpeed * motionDamp * 30;
+          artist.x = s.saddleX + s.axisX * Math.cos(currentAngle) * s.semiMajor + s.perpX * Math.sin(currentAngle) * s.semiMinor;
+          artist.y = s.saddleY + s.axisY * Math.cos(currentAngle) * s.semiMajor + s.perpY * Math.sin(currentAngle) * s.semiMinor;
+        } else if (artist.orbitRadius && artist.baseX !== undefined && artist.baseY !== undefined) {
+          // Planetary orbit around genre/subgenre system
+          const speed = artist.orbitSpeed || 0.0003;
+          const initialAngle = artist.orbitAngle || 0;
+          const currentAngle = initialAngle + time * speed * motionDamp * 30;
+          artist.x = artist.baseX + Math.cos(currentAngle) * artist.orbitRadius;
+          artist.y = artist.baseY + Math.sin(currentAngle) * artist.orbitRadius;
+        }
+
+        // Update track moons relative to updated artist planetary position
+        artist.tracks.forEach((track) => {
+          const currentTrackAngle = track.orbitAngle + time * track.orbitSpeed * 40;
+          track.x = artist.x + Math.cos(currentTrackAngle) * track.orbitRadius;
+          track.y = artist.y + Math.sin(currentTrackAngle) * track.orbitRadius;
+        });
+      });
+
       // 2. Gravitational Grid & Cosmic Coordinate Rings (Ultra-subtle reference orbits)
       ctx.strokeStyle = isDark ? 'rgba(255, 255, 255, 0.018)' : 'rgba(0, 0, 0, 0.018)';
       ctx.lineWidth = 0.75;
@@ -411,7 +456,7 @@ export const CelestialUniverseCanvas: React.FC<CelestialUniverseCanvasProps> = (
         const labelRadius = genre.radius + (isGenreSelected ? 6 : 0);
         ctx.save();
         ctx.textAlign = 'center';
-        ctx.font = `600 ${Math.max(12, Math.min(20, 13 + genre.radius * 0.14))}px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif`;
+        ctx.font = `600 ${Math.max(12, Math.min(20, 13 + genre.radius * 0.14))}px ${FONT_SANS}`;
         ctx.fillStyle = finalDim
           ? (isDark ? 'rgba(255,255,255,0.22)' : 'rgba(0,0,0,0.22)')
           : isGenreSelected
@@ -419,7 +464,7 @@ export const CelestialUniverseCanvas: React.FC<CelestialUniverseCanvasProps> = (
           : (isDark ? '#E5E7EB' : '#111215');
         ctx.fillText(genre.name.toUpperCase(), genre.x, genre.y + labelRadius + 18);
 
-        ctx.font = '10px "JetBrains Mono", monospace';
+        ctx.font = `10px ${FONT_MONO}`;
         ctx.fillStyle = finalDim
           ? (isDark ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.15)')
           : (isDark ? 'rgba(255,255,255,0.48)' : 'rgba(0,0,0,0.48)');
@@ -469,7 +514,7 @@ export const CelestialUniverseCanvas: React.FC<CelestialUniverseCanvasProps> = (
 
             if (cam.zoom >= 0.85 || isGenreSelected || isSubSelected) {
               ctx.save();
-              ctx.font = `${sub.tier === 'planet' ? '500' : '400'} 10px sans-serif`;
+              ctx.font = `${sub.tier === 'planet' ? '500' : '400'} 10px ${FONT_SANS}`;
               ctx.fillStyle = finalDim
                 ? (isDark ? 'rgba(255, 255, 255, 0.2)' : 'rgba(0, 0, 0, 0.2)')
                 : (isDark ? 'rgba(255, 255, 255, 0.75)' : 'rgba(20, 20, 20, 0.75)');
@@ -495,6 +540,20 @@ export const CelestialUniverseCanvas: React.FC<CelestialUniverseCanvasProps> = (
           const primaryGenreObj = universeData.genres.find((g) => g.name === artist.primaryGenre);
           const celestialColor = artist.celestialColor || (primaryGenreObj?.celestialColor) || getCelestialGenreColor(artist.primaryGenre);
 
+          // Ethereal planetary orbital ring for artist around genre system
+          if (!artist.isBridge && artist.orbitRadius && artist.baseX !== undefined && artist.baseY !== undefined) {
+            const isRingActive = isArtistSelected || isArtistHovered || isParentGenreSelected;
+            renderOrbitalRing(ctx, {
+              cx: artist.baseX,
+              cy: artist.baseY,
+              radius: artist.orbitRadius,
+              celestialColor,
+              dimFactor: finalDim ? 0.22 : isRingActive ? 1.6 : 0.85,
+              opacity: isRingActive ? (isDark ? 0.08 : 0.07) : (isDark ? 0.028 : 0.022),
+              isDashed: true,
+            });
+          }
+
           // Whispering gravitational link from genre sun to artist star
           if (primaryGenreObj && !artist.bridgeGenre) {
             ctx.beginPath();
@@ -502,9 +561,24 @@ export const CelestialUniverseCanvas: React.FC<CelestialUniverseCanvasProps> = (
             ctx.lineTo(artist.x, artist.y);
             ctx.strokeStyle = finalDim
               ? 'transparent'
-              : (isDark ? `rgba(${celestialColor.glowRgb}, 0.04)` : `rgba(${celestialColor.glowRgb}, 0.03)`);
+              : (isDark ? `rgba(${celestialColor.glowRgb}, 0.045)` : `rgba(${celestialColor.glowRgb}, 0.035)`);
             ctx.lineWidth = 0.75;
             ctx.stroke();
+          }
+
+          // Subtle harmonic link to parent subgenre when relevant
+          if (artist.parentSubgenre && (isArtistSelected || isArtistHovered || (selection?.type === 'subgenre' && selection.item.name === artist.parentSubgenre))) {
+            const subObj = primaryGenreObj?.subgenres.find((s) => s.name.toLowerCase() === artist.parentSubgenre!.toLowerCase());
+            if (subObj) {
+              ctx.beginPath();
+              ctx.moveTo(subObj.x, subObj.y);
+              ctx.lineTo(artist.x, artist.y);
+              ctx.strokeStyle = `rgba(${celestialColor.glowRgb}, 0.25)`;
+              ctx.lineWidth = 0.9;
+              ctx.setLineDash([2, 4]);
+              ctx.stroke();
+              ctx.setLineDash([]);
+            }
           }
 
           // Render Artist Star Material
@@ -526,7 +600,7 @@ export const CelestialUniverseCanvas: React.FC<CelestialUniverseCanvasProps> = (
           if (shouldShowLabel) {
             ctx.save();
             ctx.textAlign = 'center';
-            ctx.font = `${isArtistSelected ? '600' : '500'} 11px sans-serif`;
+            ctx.font = `${isArtistSelected ? '600' : '500'} 11px ${FONT_SANS}`;
             ctx.fillStyle = finalDim
               ? (isDark ? 'rgba(255, 255, 255, 0.18)' : 'rgba(0, 0, 0, 0.18)')
               : isArtistSelected
@@ -535,7 +609,7 @@ export const CelestialUniverseCanvas: React.FC<CelestialUniverseCanvasProps> = (
             ctx.fillText(artist.name, artist.x, artist.y + artist.radius + 14);
 
             if (isArtistSelected || cam.zoom >= 1.6) {
-              ctx.font = '9px "JetBrains Mono", monospace';
+              ctx.font = `9px ${FONT_MONO}`;
               ctx.fillStyle = finalDim
                 ? 'transparent'
                 : (isDark ? 'rgba(255, 255, 255, 0.45)' : 'rgba(0, 0, 0, 0.42)');
@@ -558,12 +632,6 @@ export const CelestialUniverseCanvas: React.FC<CelestialUniverseCanvasProps> = (
                 opacity: isDark ? 0.04 : 0.03,
               });
 
-              const currentAngle = track.orbitAngle + time * track.orbitSpeed * 40;
-              const tx = artist.x + Math.cos(currentAngle) * track.orbitRadius;
-              const ty = artist.y + Math.sin(currentAngle) * track.orbitRadius;
-              track.x = tx;
-              track.y = ty;
-
               const isTrackSelected = selection?.type === 'track' && selection.item.id === track.id;
               const isTrackHovered = currentHover?.type === 'track' && currentHover.item.id === track.id;
               const isTrackDimmed = selection !== null && !isTrackSelected && !(selection?.type === 'artist' && selection.item.id === artist.id);
@@ -572,8 +640,8 @@ export const CelestialUniverseCanvas: React.FC<CelestialUniverseCanvasProps> = (
 
               // Render Track Star Material
               renderTrackStar(ctx, {
-                x: tx,
-                y: ty,
+                x: track.x,
+                y: track.y,
                 celestialColor,
                 isSelected: isTrackSelected,
                 isHovered: isTrackHovered,
@@ -584,13 +652,13 @@ export const CelestialUniverseCanvas: React.FC<CelestialUniverseCanvasProps> = (
 
               if (cam.zoom >= 1.7 || isTrackSelected || isArtistSelected) {
                 ctx.save();
-                ctx.font = `${isTrackSelected ? '600' : '400'} 9.5px sans-serif`;
+                ctx.font = `${isTrackSelected ? '600' : '400'} 9.5px ${FONT_SANS}`;
                 ctx.fillStyle = isTrackSelected
                   ? (isDark ? '#FFFFFF' : '#111215')
                   : finalTrackDim
                   ? (isDark ? 'rgba(255, 255, 255, 0.16)' : 'rgba(0,0,0,0.16)')
                   : (isDark ? 'rgba(255, 255, 255, 0.74)' : 'rgba(30,30,30,0.82)');
-                ctx.fillText(track.title, tx + 7, ty + 3);
+                ctx.fillText(track.title, track.x + 7, track.y + 3);
                 ctx.restore();
               }
             });
@@ -648,14 +716,14 @@ export const CelestialUniverseCanvas: React.FC<CelestialUniverseCanvasProps> = (
           // Discovery System Labels (Taste Match % & Artist Name)
           ctx.save();
           ctx.textAlign = 'center';
-          ctx.font = '600 11px sans-serif';
+          ctx.font = `600 11px ${FONT_SANS}`;
           ctx.fillStyle = finalDim 
             ? (isDark ? 'rgba(255,255,255,0.22)' : 'rgba(0,0,0,0.22)')
             : (isDark ? '#EDEDED' : '#1A1C20');
           ctx.fillText(disc.recommendation.artist, disc.x, disc.y + disc.radius + 15);
 
           // Taste Match Pill Text
-          ctx.font = '9px "JetBrains Mono", monospace';
+          ctx.font = `9px ${FONT_MONO}`;
           ctx.fillStyle = finalDim
             ? 'transparent'
             : disc.color;
@@ -706,7 +774,7 @@ export const CelestialUniverseCanvas: React.FC<CelestialUniverseCanvasProps> = (
           if (isAstSelected || isAstHovered || (cam.zoom > 1.8 && !finalDim && ast.type === 'obscure_artist')) {
             ctx.save();
             ctx.textAlign = 'center';
-            ctx.font = `${isAstSelected ? '600' : '500'} 9.5px sans-serif`;
+            ctx.font = `${isAstSelected ? '600' : '500'} 9.5px ${FONT_SANS}`;
             ctx.fillStyle = isAstSelected
               ? '#FFFFFF'
               : (isDark ? 'rgba(255, 255, 255, 0.85)' : 'rgba(20, 20, 20, 0.85)');
@@ -766,10 +834,10 @@ export const CelestialUniverseCanvas: React.FC<CelestialUniverseCanvasProps> = (
           if (isMeteorHovered || isMeteorSelected) {
             ctx.save();
             ctx.textAlign = 'center';
-            ctx.font = '600 9.5px sans-serif';
+            ctx.font = `600 9.5px ${FONT_SANS}`;
             ctx.fillStyle = isDark ? '#FFFFFF' : '#111215';
             ctx.fillText(meteor.title, meteor.currentX, meteor.currentY - 10);
-            ctx.font = '8.5px "JetBrains Mono", monospace';
+            ctx.font = `8.5px ${FONT_MONO}`;
             ctx.fillStyle = `rgba(${meteorCelestialCol.glowRgb}, 0.95)`;
             ctx.fillText(
               meteor.eventType === 'new_discovery' ? 'NEW DISCOVERY' :
@@ -1095,7 +1163,7 @@ export const CelestialUniverseCanvas: React.FC<CelestialUniverseCanvasProps> = (
 
       {/* Minimal Contextual Track Modal (Level 4 detail panel) */}
       {selection?.type === 'track' && (
-        <div className="absolute bottom-6 right-6 z-30 w-80 rounded-xl bg-black/75 backdrop-blur-xl border border-white/15 p-5 shadow-2xl animate-in slide-in-from-bottom-2 duration-200 text-white">
+        <div className="absolute bottom-6 right-6 z-30 w-80 rounded-lg bg-[#111215]/95 backdrop-blur-md border border-white/10 p-4 shadow-xl animate-in slide-in-from-bottom-2 duration-200 text-white">
           <div className="flex items-center justify-between text-xs font-mono text-white/50 mb-2">
             <span>TRACK</span>
             {selection.item.bpm ? <span>{selection.item.bpm} BPM</span> : null}
@@ -1129,7 +1197,7 @@ export const CelestialUniverseCanvas: React.FC<CelestialUniverseCanvasProps> = (
               href={selection.item.spotifyUrl}
               target="_blank"
               rel="noreferrer"
-              className="mt-4 flex items-center justify-center gap-1.5 w-full py-2 px-3 rounded-lg bg-white/10 hover:bg-white/20 border border-white/15 text-xs font-medium text-white transition-all"
+              className="mt-4 flex items-center justify-center gap-1.5 w-full py-2 px-3 rounded-md bg-white/10 hover:bg-white/20 border border-white/15 text-xs font-medium text-white transition-all"
             >
               <span>Open in Spotify</span>
               <ExternalLink size={12} className="opacity-70" />
@@ -1142,14 +1210,14 @@ export const CelestialUniverseCanvas: React.FC<CelestialUniverseCanvasProps> = (
       {/* RECOMMENDATION DETAIL PANEL (DISCOVERY SYSTEM INSPECTION)    */}
       {/* ============================================================ */}
       {selection?.type === 'discovery' && (
-        <div className="absolute bottom-6 right-6 z-30 w-84 rounded-xl bg-black/85 backdrop-blur-2xl border border-white/20 p-5 shadow-2xl animate-in slide-in-from-bottom-2 duration-200 text-white">
+        <div className="absolute bottom-6 right-6 z-30 w-84 rounded-lg bg-[#111215]/95 backdrop-blur-md border border-white/10 p-4 shadow-xl animate-in slide-in-from-bottom-2 duration-200 text-white">
           <div className="flex items-center justify-between text-xs font-mono text-white/50 mb-2">
-            <span className="uppercase text-amber-300 font-semibold flex items-center gap-1">
+            <span className="uppercase text-amber-300 font-medium flex items-center gap-1">
               <Sparkles size={12} />
-              {selection.item.recommendation.category} Discovery
+              {selection.item.recommendation.category} discovery
             </span>
-            <span className="px-2 py-0.5 rounded-full bg-white/10 text-white font-mono text-[11px]">
-              {Math.round(selection.item.recommendation.score * 100)}% Taste Match
+            <span className="text-[11px] text-white/60 font-mono">
+              Profile fit: {Math.round(selection.item.recommendation.score * 100)}%
             </span>
           </div>
 
@@ -1266,13 +1334,13 @@ export const CelestialUniverseCanvas: React.FC<CelestialUniverseCanvasProps> = (
       {/* ASTEROID DETAIL PANEL (PERIPHERAL / NICHE DISCOVERY)         */}
       {/* ============================================================ */}
       {selection?.type === 'asteroid' && (
-        <div className="absolute bottom-6 right-6 z-30 w-84 rounded-xl bg-black/85 backdrop-blur-2xl border border-white/20 p-5 shadow-2xl animate-in slide-in-from-bottom-2 duration-200 text-white">
+        <div className="absolute bottom-6 right-6 z-30 w-84 rounded-lg bg-[#111215]/95 backdrop-blur-md border border-white/10 p-4 shadow-xl animate-in slide-in-from-bottom-2 duration-200 text-white">
           <div className="flex items-center justify-between text-xs font-mono text-white/50 mb-2">
             <span className="uppercase text-slate-300 font-semibold flex items-center gap-1">
               <span className="w-2 h-2 rounded-sm bg-slate-400 rotate-45 inline-block" />
               {selection.item.type.replace('_', ' ')}
             </span>
-            <span className="px-2 py-0.5 rounded-full bg-white/10 text-white font-mono text-[11px]">
+            <span className="px-2 py-0.5 rounded bg-white/10 text-white font-mono text-[11px]">
               {selection.item.trackCount} {selection.item.trackCount === 1 ? 'Track' : 'Tracks'}
             </span>
           </div>
@@ -1378,13 +1446,13 @@ export const CelestialUniverseCanvas: React.FC<CelestialUniverseCanvasProps> = (
       {/* METEOR DETAIL PANEL (ACTIVE DYNAMIC EVENT)                   */}
       {/* ============================================================ */}
       {selection?.type === 'meteor' && (
-        <div className="absolute bottom-6 right-6 z-30 w-84 rounded-xl bg-black/85 backdrop-blur-2xl border border-sky-400/30 p-5 shadow-2xl animate-in slide-in-from-bottom-2 duration-200 text-white">
+        <div className="absolute bottom-6 right-6 z-30 w-84 rounded-lg bg-[#111215]/95 backdrop-blur-md border border-sky-400/25 p-4 shadow-xl animate-in slide-in-from-bottom-2 duration-200 text-white">
           <div className="flex items-center justify-between text-xs font-mono text-white/50 mb-2">
             <span className="uppercase text-sky-300 font-semibold flex items-center gap-1.5">
               <span className="w-2 h-2 rounded-full bg-sky-400 animate-ping inline-block" />
               {selection.item.eventType.replace(/_/g, ' ')}
             </span>
-            <span className="px-2 py-0.5 rounded-full bg-sky-400/10 text-sky-200 font-mono text-[11px] border border-sky-400/20">
+            <span className="px-2 py-0.5 rounded bg-sky-400/10 text-sky-200 font-mono text-[11px] border border-sky-400/20">
               Trajectory: {Math.round(selection.item.progress * 100)}%
             </span>
           </div>

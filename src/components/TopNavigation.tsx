@@ -37,6 +37,19 @@ export const TopNavigation: React.FC<TopNavigationProps> = ({
   onDisconnectSpotify,
 }) => {
   const [showMenu, setShowMenu] = useState(false);
+  const [isConnecting, setIsConnecting] = useState(false);
+
+  const handleSpotifyConnect = async () => {
+    try {
+      setIsConnecting(true);
+      await loginWithSpotify();
+    } catch (err: unknown) {
+      console.error('Spotify login error:', err);
+      const msg = err instanceof Error ? err.message : 'Could not initiate Spotify connection';
+      alert(`Spotify Connection: ${msg}`);
+      setIsConnecting(false);
+    }
+  };
 
   // Status badge styling based on Spotify connection state
   const isConnected = spotifyStatus && spotifyStatus.state !== 'disconnected';
@@ -153,11 +166,12 @@ export const TopNavigation: React.FC<TopNavigationProps> = ({
         {/* Continuous Stream status instead of mandatory sync */}
         {!isConnected ? (
           <button
-            onClick={loginWithSpotify}
-            className="px-3 py-1.5 rounded bg-[var(--text-primary)] text-[var(--bg-primary)] hover:opacity-90 font-medium transition-all flex items-center gap-1.5"
+            onClick={handleSpotifyConnect}
+            disabled={isConnecting}
+            className="px-3 py-1.5 rounded bg-[var(--text-primary)] text-[var(--bg-primary)] hover:opacity-90 font-medium transition-all flex items-center gap-1.5 disabled:opacity-50"
           >
-            <Radio size={12} />
-            <span>Connect Spotify</span>
+            <Radio size={12} className={isConnecting ? 'animate-pulse' : ''} />
+            <span>{isConnecting ? 'Connecting...' : 'Connect Spotify'}</span>
           </button>
         ) : (
           <div className="flex items-center gap-2">
@@ -202,10 +216,11 @@ export const TopNavigation: React.FC<TopNavigationProps> = ({
               </button>
               {!isConnected ? (
                 <button
-                  onClick={() => { loginWithSpotify(); setShowMenu(false); }}
-                  className="w-full text-left px-3 py-1.5 text-xs text-emerald-400 hover:bg-[var(--bg-surface)]"
+                  onClick={() => { setShowMenu(false); handleSpotifyConnect(); }}
+                  disabled={isConnecting}
+                  className="w-full text-left px-3 py-1.5 text-xs text-emerald-400 hover:bg-[var(--bg-surface)] disabled:opacity-50"
                 >
-                  Connect Spotify
+                  {isConnecting ? 'Connecting...' : 'Connect Spotify'}
                 </button>
               ) : onDisconnectSpotify ? (
                 <button

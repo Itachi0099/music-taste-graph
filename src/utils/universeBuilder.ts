@@ -228,7 +228,8 @@ export function buildCelestialUniverse(
     });
   });
 
-  // 4. Position Artists (Stars)
+
+  // 4. Position Artists (Planetary Bodies Orbiting Genre/Subgenre Systems)
   const universeArtists: UniverseArtist[] = [];
   const allTracksList: UniverseTrack[] = [];
   const bridgeList: Array<{ artist: UniverseArtist; genreA: string; genreB: string }> = [];
@@ -240,46 +241,256 @@ export function buildCelestialUniverse(
     ? playbackState.trackTitle.toLowerCase()
     : null;
 
+  // Track recency factor for each artist from listening events and playback
+  const recentArtistActivity = new Map<string, number>();
+  if (listeningEvents && listeningEvents.length > 0) {
+    listeningEvents.slice(0, 30).forEach((evt, idx) => {
+      const a = evt.artistName.toLowerCase();
+      const weight = Math.max(0.15, 1.0 - idx * 0.035);
+      recentArtistActivity.set(a, Math.max(recentArtistActivity.get(a) || 0, weight));
+    });
+  }
+  if (playbackState?.isPlaying && playbackState.artistName) {
+    recentArtistActivity.set(playbackState.artistName.toLowerCase(), 1.6);
+  }
+
+  // Group artists by whether they are cross-genre bridges or belong primarily to a genre system
+  interface ArtistMeta {
+    artistName: string;
+    aTracks: RawTrackRecord[];
+    genres: string[];
+    primaryGenre: string;
+    secondaryGenres: string[];
+    isBridge: boolean;
+    bridgeGenre?: string;
+    dominantSubgenre?: string;
+    tasteImportance: number;
+    artistRadius: number;
+    recencyFactor: number;
+    isCurrentlyPlaying: boolean;
+    relationshipScore: number; // 0 (peripheral) to 1 (core)
+  }
+
+  const artistMetaList: ArtistMeta[] = [];
+
   artistRecords.forEach((aTracks, artistName) => {
     const genres = Array.from(artistGenres.get(artistName) || []);
     const primaryGenre = genres[0] || 'Unknown';
     const secondaryGenres = genres.slice(1);
+    const isBridge = genres.length >= 2 && genreCenterMap.has(genres[1]);
+    const bridgeGenre = isBridge ? genres[1] : undefined;
 
-    const isBridge = genres.length >= 2;
-    const parentSystem = genreCenterMap.get(primaryGenre) || genreCenterMap.get(genreSystems[0].name)!;
+    // Dominant subgenre for this artist within primary genre
+    const subCounts = new Map<string, number>();
+    aTracks.forEach((t) => {
+      const sub = t.subgenre?.trim();
+      if (sub && sub.toLowerCase() !== primaryGenre.toLowerCase()) {
+        subCounts.set(sub, (subCounts.get(sub) || 0) + 1);
+      }
+    });
+    const sortedSubCounts = Array.from(subCounts.entries()).sort((a, b) => b[1] - a[1]);
+    const dominantSubgenre = sortedSubCounts.length > 0 ? sortedSubCounts[0][0] : undefined;
 
-    const trackCount = aTracks.length;
-    const artistRadius = Math.min(18, Math.max(8.5, 7 + Math.sqrt(trackCount) * 2.8));
-
-    let ax: number;
-    let ay: number;
-    let bridgeGenre: string | undefined;
-
-    if (isBridge && genreCenterMap.has(genres[1])) {
-      const gB = genreCenterMap.get(genres[1])!;
-      bridgeGenre = genres[1];
-      const saddleT = 0.5 + 0.15 * Math.sin(artistName.length);
-      ax = parentSystem.x + (gB.x - parentSystem.x) * saddleT + Math.sin(artistName.length * 2.1) * 35;
-      ay = parentSystem.y + (gB.y - parentSystem.y) * saddleT + Math.cos(artistName.length * 2.1) * 35;
-    } else {
-      const hash = idxGenre(artistName);
-      const angle = (hash / 100) * Math.PI * 2;
-      const orbitOffset = parentSystem.radius + 85 + (hash % 120);
-      ax = parentSystem.x + Math.cos(angle) * orbitOffset;
-      ay = parentSystem.y + Math.sin(angle) * orbitOffset;
-    }
-
+    // Recency & currently playing
+    const recencyFactor = recentArtistActivity.get(artistName.toLowerCase()) || 0;
     const isCurrentlyPlaying = currentlyPlayingArtistLower ? artistName.toLowerCase() === currentlyPlayingArtistLower : false;
 
-    // Artists tracks as satellites
-    const artistTracks: UniverseTrack[] = aTracks.map((t, tIdx) => {
-      const orbitRadius = artistRadius + 14 + tIdx * 9.5;
-      const orbitAngle = (tIdx / Math.max(1, aTracks.length)) * Math.PI * 2 + 0.5;
-      const orbitSpeed = 0.0004 + (tIdx % 3) * 0.0002;
-      const tx = ax + Math.cos(orbitAngle) * orbitRadius;
-      const ty = ay + Math.sin(orbitAngle) * orbitRadius;
+    // Artist size derived from relative importance in user taste
+    const affinity = tasteProfile.artistAffinity[artistName] ?? Math.min(1, aTracks.length / 5);
+    const trackCount = aTracks.length;
+    const tasteImportance = Math.min(1.0, Math.max(0.08, affinity * 0.82 + (recencyFactor > 0 ? 0.18 : 0)));
+    // Size scales from 8.5 to 21px based on taste importance
+    const artistRadius = Math.min(21, Math.max(8.5, 8.5 + tasteImportance * 10.5 + Math.min(2.5, Math.sqrt(trackCount) * 0.65)));
 
-      const isTrackPlaying = isCurrentlyPlaying && currentlyPlayingTrackLower
+    // Relationship to primary genre
+    const genreTracksCount = aTracks.filter((t) => (t.genre || '').toLowerCase() === primaryGenre.toLowerCase()).length;
+    const exclusivity = genreTracksCount / Math.max(1, aTracks.length);
+    const parentSys = genreSystems.find((g) => g.name === primaryGenre);
+    const genreShare = genreTracksCount / Math.max(1, parentSys?.trackCount || 1);
+    const relationshipScore = exclusivity * 0.6 + Math.min(1, genreShare * 3) * 0.4;
+
+    artistMetaList.push({
+      artistName,
+      aTracks,
+      genres,
+      primaryGenre,
+      secondaryGenres,
+      isBridge,
+      bridgeGenre,
+      dominantSubgenre,
+      tasteImportance,
+      artistRadius,
+      recencyFactor,
+      isCurrentlyPlaying,
+      relationshipScore,
+    });
+  });
+
+  // Calculate planetary orbits per genre system for non-bridge artists
+  const genreArtistMap = new Map<string, ArtistMeta[]>();
+  const bridgeMetaList: ArtistMeta[] = [];
+
+  artistMetaList.forEach((meta) => {
+    if (meta.isBridge) {
+      bridgeMetaList.push(meta);
+    } else {
+      if (!genreArtistMap.has(meta.primaryGenre)) genreArtistMap.set(meta.primaryGenre, []);
+      genreArtistMap.get(meta.primaryGenre)!.push(meta);
+    }
+  });
+
+  // Position genre-bound artists in clean, distinct planetary orbital shells around their genre/subgenre
+  genreArtistMap.forEach((metaGroup, gName) => {
+    const parentSystem = genreCenterMap.get(gName) || genreCenterMap.get(genreSystems[0]?.name || '');
+    if (!parentSystem) return;
+
+    // Find subgenre objects in this genre system
+    const gSys = genreSystems.find((g) => g.name === gName);
+
+    // Sort artists in this genre system by relationship score (core artists first)
+    // so core artists receive inner orbital shells and peripheral/subgenre artists receive outer shells
+    metaGroup.sort((a, b) => b.relationshipScore - a.relationshipScore);
+
+    const numArtists = metaGroup.length;
+    const baseInnerRadius = parentSystem.radius + 50;
+    const orbitStep = Math.max(18, Math.min(28, 140 / Math.max(1, numArtists)));
+
+    metaGroup.forEach((meta, aIdx) => {
+      const matchingSub = meta.dominantSubgenre && gSys
+        ? gSys.subgenres.find((s) => s.name.toLowerCase() === meta.dominantSubgenre!.toLowerCase())
+        : undefined;
+
+      // Orbital radius represents relationship/distance from genre
+      let orbitRadius: number;
+      if (matchingSub) {
+        // Aligned with the subgenre's orbital distance from the genre center
+        orbitRadius = matchingSub.distance + (aIdx % 3 - 1) * 8;
+      } else {
+        // Distance based on relationship score with non-overlapping concentric spacing
+        orbitRadius = baseInnerRadius + aIdx * orbitStep + (1.0 - meta.relationshipScore) * 15;
+      }
+
+      const hash = idxGenre(meta.artistName);
+      // Angle distributed around the star, harmonized with subgenre if present
+      let initialAngle: number;
+      if (matchingSub) {
+        initialAngle = matchingSub.angle + ((hash % 16 - 8) / 100) * Math.PI;
+      } else {
+        initialAngle = (aIdx / Math.max(1, numArtists)) * Math.PI * 2 + (hash % 10) * 0.05;
+      }
+
+      // Orbital velocity driven by distance and listening activity/recency
+      const distanceFactor = Math.sqrt(95 / Math.max(50, orbitRadius));
+      const activityFactor = 1.0 + meta.recencyFactor * 0.85 + (meta.isCurrentlyPlaying ? 0.75 : 0.0);
+      const orbitSpeed = 0.00032 * distanceFactor * activityFactor;
+
+      const ax = parentSystem.x + Math.cos(initialAngle) * orbitRadius;
+      const ay = parentSystem.y + Math.sin(initialAngle) * orbitRadius;
+
+      // Artists tracks as satellites (moons) around the artist planet
+      const artistTracks: UniverseTrack[] = meta.aTracks.map((t, tIdx) => {
+        const tOrbitRadius = meta.artistRadius + 14 + tIdx * 9.5;
+        const tOrbitAngle = (tIdx / Math.max(1, meta.aTracks.length)) * Math.PI * 2 + 0.5;
+        const tOrbitSpeed = 0.0004 + (tIdx % 3) * 0.0002;
+        const tx = ax + Math.cos(tOrbitAngle) * tOrbitRadius;
+        const ty = ay + Math.sin(tOrbitAngle) * tOrbitRadius;
+
+        const isTrackPlaying = meta.isCurrentlyPlaying && currentlyPlayingTrackLower
+          ? t.track.toLowerCase().includes(currentlyPlayingTrackLower) || currentlyPlayingTrackLower.includes(t.track.toLowerCase())
+          : false;
+
+        const trackObj: UniverseTrack = {
+          id: `track-${t.track.toLowerCase().replace(/[^a-z0-9]/g, '-')}-${tIdx}`,
+          title: t.track,
+          artist: t.artist,
+          genre: t.genre,
+          subgenre: t.subgenre,
+          bpm: t.bpm,
+          duration: t.duration,
+          album: t.album,
+          year: t.year,
+          orbitRadius: tOrbitRadius,
+          orbitAngle: tOrbitAngle,
+          orbitSpeed: tOrbitSpeed,
+          x: tx,
+          y: ty,
+          spotifyUrl: t.spotifyUrl,
+          celestialColor: parentSystem.celestialColor,
+          isCurrentlyPlaying: isTrackPlaying,
+        };
+
+        allTracksList.push(trackObj);
+        return trackObj;
+      });
+
+      const artistObj: UniverseArtist = {
+        id: `artist-${meta.artistName.toLowerCase().replace(/[^a-z0-9]/g, '-')}`,
+        name: meta.artistName,
+        primaryGenre: meta.primaryGenre,
+        secondaryGenres: meta.secondaryGenres,
+        trackCount: meta.aTracks.length,
+        x: ax,
+        y: ay,
+        radius: meta.artistRadius,
+        tracks: artistTracks,
+        celestialColor: parentSystem.celestialColor,
+        isCurrentlyPlaying: meta.isCurrentlyPlaying,
+        orbitRadius,
+        orbitAngle: initialAngle,
+        orbitSpeed,
+        baseX: parentSystem.x,
+        baseY: parentSystem.y,
+        parentSubgenre: meta.dominantSubgenre,
+        tasteImportance: meta.tasteImportance,
+        recencyFactor: meta.recencyFactor,
+        isBridge: false,
+      };
+
+      universeArtists.push(artistObj);
+      if (gSys) gSys.artists.push(artistObj);
+    });
+  });
+
+  // Position cross-genre bridge artists with a meaningful cross-system relationship
+  bridgeMetaList.forEach((meta) => {
+    const gA = genreCenterMap.get(meta.primaryGenre) || genreCenterMap.get(genreSystems[0]?.name || '')!;
+    const gB = genreCenterMap.get(meta.bridgeGenre!) || gA;
+
+    const dx = gB.x - gA.x;
+    const dy = gB.y - gA.y;
+    const bridgeDist = Math.hypot(dx, dy) || 1;
+    const axisX = dx / bridgeDist;
+    const axisY = dy / bridgeDist;
+    const perpX = -axisY;
+    const perpY = axisX;
+
+    const saddleT = 0.5 + 0.12 * Math.sin(meta.artistName.length * 1.7);
+    const midX = gA.x + dx * saddleT;
+    const midY = gA.y + dy * saddleT;
+    const basePerpOffset = Math.sin(meta.artistName.length * 2.1) * 35;
+
+    const saddleX = midX + perpX * basePerpOffset;
+    const saddleY = midY + perpY * basePerpOffset;
+
+    const semiMajor = Math.min(65, Math.max(25, bridgeDist * 0.08));
+    const semiMinor = Math.min(35, Math.max(16, bridgeDist * 0.04));
+    const initialAngle = (idxGenre(meta.artistName) / 100) * Math.PI * 2;
+
+    const activityFactor = 1.0 + meta.recencyFactor * 0.85 + (meta.isCurrentlyPlaying ? 0.75 : 0.0);
+    const bridgeSpeed = 0.00028 * activityFactor;
+
+    const ax = saddleX + axisX * Math.cos(initialAngle) * semiMajor + perpX * Math.sin(initialAngle) * semiMinor;
+    const ay = saddleY + axisY * Math.cos(initialAngle) * semiMajor + perpY * Math.sin(initialAngle) * semiMinor;
+    const orbitRadius = Math.hypot(ax - gA.x, ay - gA.y);
+
+    const artistTracks: UniverseTrack[] = meta.aTracks.map((t, tIdx) => {
+      const tOrbitRadius = meta.artistRadius + 14 + tIdx * 9.5;
+      const tOrbitAngle = (tIdx / Math.max(1, meta.aTracks.length)) * Math.PI * 2 + 0.5;
+      const tOrbitSpeed = 0.0004 + (tIdx % 3) * 0.0002;
+      const tx = ax + Math.cos(tOrbitAngle) * tOrbitRadius;
+      const ty = ay + Math.sin(tOrbitAngle) * tOrbitRadius;
+
+      const isTrackPlaying = meta.isCurrentlyPlaying && currentlyPlayingTrackLower
         ? t.track.toLowerCase().includes(currentlyPlayingTrackLower) || currentlyPlayingTrackLower.includes(t.track.toLowerCase())
         : false;
 
@@ -293,13 +504,13 @@ export function buildCelestialUniverse(
         duration: t.duration,
         album: t.album,
         year: t.year,
-        orbitRadius,
-        orbitAngle,
-        orbitSpeed,
+        orbitRadius: tOrbitRadius,
+        orbitAngle: tOrbitAngle,
+        orbitSpeed: tOrbitSpeed,
         x: tx,
         y: ty,
         spotifyUrl: t.spotifyUrl,
-        celestialColor: parentSystem.celestialColor,
+        celestialColor: gA.celestialColor,
         isCurrentlyPlaying: isTrackPlaying,
       };
 
@@ -308,27 +519,45 @@ export function buildCelestialUniverse(
     });
 
     const artistObj: UniverseArtist = {
-      id: `artist-${artistName.toLowerCase().replace(/[^a-z0-9]/g, '-')}`,
-      name: artistName,
-      primaryGenre,
-      secondaryGenres,
-      trackCount,
+      id: `artist-${meta.artistName.toLowerCase().replace(/[^a-z0-9]/g, '-')}`,
+      name: meta.artistName,
+      primaryGenre: meta.primaryGenre,
+      secondaryGenres: meta.secondaryGenres,
+      trackCount: meta.aTracks.length,
       x: ax,
       y: ay,
-      radius: artistRadius,
+      radius: meta.artistRadius,
       tracks: artistTracks,
-      bridgeGenre,
-      celestialColor: parentSystem.celestialColor,
-      isCurrentlyPlaying,
+      bridgeGenre: meta.bridgeGenre,
+      celestialColor: gA.celestialColor,
+      isCurrentlyPlaying: meta.isCurrentlyPlaying,
+      orbitRadius,
+      orbitAngle: initialAngle,
+      orbitSpeed: bridgeSpeed,
+      baseX: saddleX,
+      baseY: saddleY,
+      parentSubgenre: meta.dominantSubgenre,
+      tasteImportance: meta.tasteImportance,
+      recencyFactor: meta.recencyFactor,
+      isBridge: true,
+      bridgeSaddle: {
+        saddleX,
+        saddleY,
+        axisX,
+        axisY,
+        perpX,
+        perpY,
+        semiMajor,
+        semiMinor,
+        orbitSpeed: bridgeSpeed,
+        initialAngle,
+      },
     };
 
     universeArtists.push(artistObj);
+    bridgeList.push({ artist: artistObj, genreA: meta.primaryGenre, genreB: meta.bridgeGenre! });
 
-    if (isBridge && bridgeGenre) {
-      bridgeList.push({ artist: artistObj, genreA: primaryGenre, genreB: bridgeGenre });
-    }
-
-    const gSys = genreSystems.find((g) => g.name === primaryGenre);
+    const gSys = genreSystems.find((g) => g.name === meta.primaryGenre);
     if (gSys) gSys.artists.push(artistObj);
   });
 

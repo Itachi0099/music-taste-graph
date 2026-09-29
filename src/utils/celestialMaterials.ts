@@ -483,7 +483,7 @@ export function renderDiscoveryStar(
   ctx.save();
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  ctx.font = `600 ${isSelected ? '12px' : '10px'} -apple-system, BlinkMacSystemFont, sans-serif`;
+  ctx.font = `600 ${isSelected ? '12px' : '10px'} "Plus Jakarta Sans", -apple-system, BlinkMacSystemFont, sans-serif`;
   ctx.fillStyle = isSelected ? (isDark ? '#000000' : '#FFFFFF') : `rgba(${coreRgb}, 0.9)`;
   ctx.fillText('?', x, y + 0.5);
   ctx.restore();

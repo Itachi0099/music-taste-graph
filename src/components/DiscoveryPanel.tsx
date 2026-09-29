@@ -1,6 +1,6 @@
 import React from 'react';
 import type { DiscoveryCategory, CelestialDiscoverySystem } from '../types';
-import { Sparkles, Zap, X } from 'lucide-react';
+import { Sparkles, X } from 'lucide-react';
 
 interface DiscoveryPanelProps {
   isOpen: boolean;
@@ -31,7 +31,7 @@ export const DiscoveryPanel: React.FC<DiscoveryPanelProps> = ({
     : discoveries.filter((d) => d.recommendation.category === activeCategory);
 
   return (
-    <aside className="fixed z-40 bg-[var(--bg-primary)] border-[var(--border-primary)] shadow-2xl flex flex-col overflow-hidden transition-all bottom-0 inset-x-0 max-h-[75vh] rounded-t-2xl border-t animate-in slide-in-from-bottom duration-200 md:bottom-auto md:top-0 md:right-0 md:left-auto md:w-full md:max-w-sm md:h-full md:max-h-full md:rounded-none md:border-t-0 md:border-l md:slide-in-from-right">
+    <aside className="fixed z-40 bg-[var(--bg-primary)] border-[var(--border-primary)] shadow-2xl flex flex-col overflow-hidden transition-all bottom-0 inset-x-0 max-h-[75vh] rounded-t-lg border-t animate-in slide-in-from-bottom duration-200 md:bottom-auto md:top-0 md:right-0 md:left-auto md:w-full md:max-w-sm md:h-full md:max-h-full md:rounded-none md:border-t-0 md:border-l md:slide-in-from-right">
       {/* Header */}
       <div className="px-5 py-4 border-b border-[var(--border-primary)] flex items-center justify-between">
         <div className="flex items-center gap-2">
@@ -103,35 +103,34 @@ export const DiscoveryPanel: React.FC<DiscoveryPanelProps> = ({
       </div>
 
       {/* Discovery List */}
-      <div className="flex-1 overflow-y-auto p-4 space-y-2.5">
+      <div className="flex-1 overflow-y-auto p-4 space-y-2">
         {filteredDiscoveries.map((disc) => (
           <div
             key={disc.id}
             onClick={() => {
               onSelectDiscovery(disc);
             }}
-            className="p-3.5 rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-card)] hover:border-[var(--text-primary)] cursor-pointer group transition-all shadow-xs hover:shadow-md"
+            className="p-3 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-card)] hover:border-[var(--text-primary)] cursor-pointer group transition-all shadow-xs"
           >
-            <div className="flex items-center justify-between text-xs mb-1">
-              <span className="font-semibold text-[var(--text-primary)] text-sm group-hover:text-amber-500 transition-colors">
+            <div className="flex items-baseline justify-between gap-2 mb-1">
+              <span className="font-semibold text-[var(--text-primary)] text-sm group-hover:text-amber-500 transition-colors truncate">
                 {disc.recommendation.artist}
               </span>
-              <span className="font-mono text-[11px] px-2 py-0.5 rounded-full bg-[var(--bg-surface)] text-[var(--text-secondary)]">
-                {Math.round(disc.recommendation.score * 100)}% Match
+              <span className="font-mono text-[10.5px] text-[var(--text-muted)] flex-shrink-0">
+                {Math.round(disc.recommendation.score * 100)}% fit
               </span>
             </div>
 
-            <p className="text-xs text-[var(--text-secondary)] font-mono">
-              {disc.recommendation.genre} · {disc.recommendation.subgenre}
+            <p className="text-[11px] text-[var(--text-secondary)] leading-snug line-clamp-2 mb-1.5 font-sans">
+              {disc.recommendation.reasons[0] || `${disc.recommendation.genre} sound aligned with your library`}
             </p>
 
-            <div className="mt-2.5 pt-2 border-t border-[var(--border-subtle)] flex items-center justify-between text-[11px]">
-              <span className="text-[var(--text-muted)] font-mono uppercase text-[9.5px]">
-                {disc.recommendation.category}
+            <div className="flex items-center justify-between text-[10.5px] text-[var(--text-muted)] font-mono pt-1.5 border-t border-[var(--border-subtle)]">
+              <span>
+                {disc.recommendation.genre} {disc.recommendation.bpm ? `· ${disc.recommendation.bpm} BPM` : ''}
               </span>
-              <span className="flex items-center gap-1 text-[var(--text-secondary)] group-hover:text-[var(--text-primary)] transition-colors font-medium">
-                <Zap size={11} className="text-sky-400" />
-                <span>Travel to system →</span>
+              <span className="text-[var(--text-secondary)] group-hover:text-[var(--text-primary)] transition-colors font-medium">
+                View in orbit →
               </span>
             </div>
           </div>

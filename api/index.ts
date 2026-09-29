@@ -174,8 +174,10 @@ const envRedirectUris = [
 
 const ALLOWED_REDIRECT_URIS = new Set([...DEFAULT_ALLOWED_REDIRECT_URIS, ...envRedirectUris]);
 
+const DEFAULT_SPOTIFY_CLIENT_ID = '663e5f2a2950473ba037426e5343b8df';
+
 function getSpotifyClientId(): string {
-  const clientId = process.env.SPOTIFY_CLIENT_ID || process.env.VITE_SPOTIFY_CLIENT_ID;
+  const clientId = process.env.SPOTIFY_CLIENT_ID || process.env.VITE_SPOTIFY_CLIENT_ID || DEFAULT_SPOTIFY_CLIENT_ID;
   if (!clientId) {
     throw new Error('SPOTIFY_CLIENT_ID is not configured in server environment');
   }
