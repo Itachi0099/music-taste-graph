@@ -382,7 +382,7 @@ export function buildCelestialUniverse(
       // Orbital velocity driven by distance and listening activity/recency
       const distanceFactor = Math.sqrt(95 / Math.max(50, orbitRadius));
       const activityFactor = 1.0 + meta.recencyFactor * 0.85 + (meta.isCurrentlyPlaying ? 0.75 : 0.0);
-      const orbitSpeed = 0.00032 * distanceFactor * activityFactor;
+      const orbitSpeed = 0.0016 * distanceFactor * activityFactor;
 
       const ax = parentSystem.x + Math.cos(initialAngle) * orbitRadius;
       const ay = parentSystem.y + Math.sin(initialAngle) * orbitRadius;
@@ -391,7 +391,7 @@ export function buildCelestialUniverse(
       const artistTracks: UniverseTrack[] = meta.aTracks.map((t, tIdx) => {
         const tOrbitRadius = meta.artistRadius + 14 + tIdx * 9.5;
         const tOrbitAngle = (tIdx / Math.max(1, meta.aTracks.length)) * Math.PI * 2 + 0.5;
-        const tOrbitSpeed = 0.0004 + (tIdx % 3) * 0.0002;
+        const tOrbitSpeed = 0.0035 + (tIdx % 3) * 0.0012;
         const tx = ax + Math.cos(tOrbitAngle) * tOrbitRadius;
         const ty = ay + Math.sin(tOrbitAngle) * tOrbitRadius;
 
@@ -477,7 +477,7 @@ export function buildCelestialUniverse(
     const initialAngle = (idxGenre(meta.artistName) / 100) * Math.PI * 2;
 
     const activityFactor = 1.0 + meta.recencyFactor * 0.85 + (meta.isCurrentlyPlaying ? 0.75 : 0.0);
-    const bridgeSpeed = 0.00028 * activityFactor;
+    const bridgeSpeed = 0.0014 * activityFactor;
 
     const ax = saddleX + axisX * Math.cos(initialAngle) * semiMajor + perpX * Math.sin(initialAngle) * semiMinor;
     const ay = saddleY + axisY * Math.cos(initialAngle) * semiMajor + perpY * Math.sin(initialAngle) * semiMinor;
@@ -629,7 +629,7 @@ export function buildCelestialUniverse(
       const seed = gIdx * 37 + i * 19;
       const beltDist = gSystem.radius * (1.65 + 0.9 * ((seed % 100) / 100));
       const orbitAngle = ((i / densityCount) * Math.PI * 2) + ((seed % 50) / 50) * 0.4;
-      const orbitSpeed = (0.0003 + (seed % 5) * 0.0001) * (i % 2 === 0 ? 1 : -1);
+      const orbitSpeed = (0.0016 + (seed % 5) * 0.0004) * (i % 2 === 0 ? 1 : -1);
 
       const ax = gSystem.x + Math.cos(orbitAngle) * beltDist;
       const ay = gSystem.y + Math.sin(orbitAngle) * beltDist;
@@ -743,9 +743,9 @@ export function buildCelestialUniverse(
           targetY: targetG.y,
           currentX: startX,
           currentY: startY,
-          speed: 0.0022 + eIdx * 0.0003,
-          progress: (0.2 + eIdx * 0.25) % 1.0,
-          trailLength: 28,
+          speed: 0.0036 + eIdx * 0.0006,
+          progress: (0.15 + eIdx * 0.25) % 1.0,
+          trailLength: 32,
           history: [],
           color: col.primary,
           celestialColor: col,
@@ -778,9 +778,9 @@ export function buildCelestialUniverse(
         targetY: targetG.y,
         currentX: startX,
         currentY: startY,
-        speed: 0.002,
+        speed: 0.0034,
         progress: 0.45,
-        trailLength: 26,
+        trailLength: 30,
         history: [],
         color: recentCol.primary,
         celestialColor: recentCol,
@@ -815,9 +815,9 @@ export function buildCelestialUniverse(
       targetY: disc.y,
       currentX: startX,
       currentY: startY,
-      speed: 0.0014 + dIdx * 0.0003,
+      speed: 0.0032 + dIdx * 0.0006,
       progress: (0.15 + dIdx * 0.35) % 1.0,
-      trailLength: 30,
+      trailLength: 32,
       history: [],
       color: discCol.primary,
       celestialColor: discCol,
@@ -848,9 +848,9 @@ export function buildCelestialUniverse(
         targetY: gB.y,
         currentX: gA.x,
         currentY: gA.y,
-        speed: 0.0018,
+        speed: 0.0036,
         progress: 0.65,
-        trailLength: 26,
+        trailLength: 30,
         history: [],
         color: bridgeCol.primary,
         celestialColor: bridgeCol,

@@ -360,29 +360,32 @@ export const CelestialUniverseCanvas: React.FC<CelestialUniverseCanvasProps> = (
       universeData.artists.forEach((artist) => {
         const isArtistHovered = currentHover?.type === 'artist' && currentHover.item.id === artist.id;
         const isArtistSelected = selection?.type === 'artist' && selection.item.id === artist.id;
-        // Motion damping on hover/select allows effortless reading and inspection
-        const motionDamp = isArtistHovered ? 0.2 : isArtistSelected ? 0.35 : 1.0;
+        // Motion damping on hover/select allows effortless reading and inspection without jitter
+        const motionDamp = isArtistHovered ? 0.25 : isArtistSelected ? 0.35 : 1.0;
 
         if (artist.isBridge && artist.bridgeSaddle) {
           // Cross-genre bridge artist: orbital motion along gravitational saddle between Genre A & B
           const s = artist.bridgeSaddle;
-          const currentAngle = s.initialAngle + time * s.orbitSpeed * motionDamp * 30;
-          artist.x = s.saddleX + s.axisX * Math.cos(currentAngle) * s.semiMajor + s.perpX * Math.sin(currentAngle) * s.semiMinor;
-          artist.y = s.saddleY + s.axisY * Math.cos(currentAngle) * s.semiMajor + s.perpY * Math.sin(currentAngle) * s.semiMinor;
-        } else if (artist.orbitRadius && artist.baseX !== undefined && artist.baseY !== undefined) {
-          // Planetary orbit around genre/subgenre system
-          const speed = artist.orbitSpeed || 0.0003;
-          const initialAngle = artist.orbitAngle || 0;
-          const currentAngle = initialAngle + time * speed * motionDamp * 30;
-          artist.x = artist.baseX + Math.cos(currentAngle) * artist.orbitRadius;
-          artist.y = artist.baseY + Math.sin(currentAngle) * artist.orbitRadius;
+          s.initialAngle = (s.initialAngle ?? 0) + (s.orbitSpeed || 0.0014) * motionDamp;
+          artist.x = s.saddleX + s.axisX * Math.cos(s.initialAngle) * s.semiMajor + s.perpX * Math.sin(s.initialAngle) * s.semiMinor;
+          artist.y = s.saddleY + s.axisY * Math.cos(s.initialAngle) * s.semiMajor + s.perpY * Math.sin(s.initialAngle) * s.semiMinor;
+        } else if (artist.orbitRadius) {
+          // Planetary orbit continuously revolving around parent genre system
+          const parentGenre = universeData.genres.find((g) => g.name === artist.primaryGenre) || universeData.genres[0];
+          const originX = parentGenre ? parentGenre.x : (artist.baseX ?? 0);
+          const originY = parentGenre ? parentGenre.y : (artist.baseY ?? 0);
+
+          const speed = artist.orbitSpeed || 0.0016;
+          artist.orbitAngle = (artist.orbitAngle ?? 0) + speed * motionDamp;
+          artist.x = originX + Math.cos(artist.orbitAngle) * artist.orbitRadius;
+          artist.y = originY + Math.sin(artist.orbitAngle) * artist.orbitRadius;
         }
 
         // Update track moons relative to updated artist planetary position
         artist.tracks.forEach((track) => {
-          const currentTrackAngle = track.orbitAngle + time * track.orbitSpeed * 40;
-          track.x = artist.x + Math.cos(currentTrackAngle) * track.orbitRadius;
-          track.y = artist.y + Math.sin(currentTrackAngle) * track.orbitRadius;
+          track.orbitAngle = (track.orbitAngle ?? 0) + (track.orbitSpeed || 0.0035);
+          track.x = artist.x + Math.cos(track.orbitAngle) * track.orbitRadius;
+          track.y = artist.y + Math.sin(track.orbitAngle) * track.orbitRadius;
         });
       });
 
@@ -541,11 +544,14 @@ export const CelestialUniverseCanvas: React.FC<CelestialUniverseCanvasProps> = (
           const celestialColor = artist.celestialColor || (primaryGenreObj?.celestialColor) || getCelestialGenreColor(artist.primaryGenre);
 
           // Ethereal planetary orbital ring for artist around genre system
-          if (!artist.isBridge && artist.orbitRadius && artist.baseX !== undefined && artist.baseY !== undefined) {
+          if (!artist.isBridge && artist.orbitRadius) {
+            const genreCenter = primaryGenreObj || universeData.genres[0];
+            const cx = genreCenter ? genreCenter.x : (artist.baseX ?? 0);
+            const cy = genreCenter ? genreCenter.y : (artist.baseY ?? 0);
             const isRingActive = isArtistSelected || isArtistHovered || isParentGenreSelected;
             renderOrbitalRing(ctx, {
-              cx: artist.baseX,
-              cy: artist.baseY,
+              cx,
+              cy,
               radius: artist.orbitRadius,
               celestialColor,
               dimFactor: finalDim ? 0.22 : isRingActive ? 1.6 : 0.85,
@@ -749,11 +755,16 @@ export const CelestialUniverseCanvas: React.FC<CelestialUniverseCanvasProps> = (
           ) : true;
           const finalDim = isDimmed || (!searchMatch && searchMatches !== null);
 
-          // Subtle orbital motion for belt asteroids: gently slow or stop on hover
-          const motionMultiplier = isAstHovered || isAstSelected ? 0 : 1;
-          const currentAngle = ast.orbitAngle + time * ast.orbitSpeed * motionMultiplier * 30;
-          ast.x = ast.baseX + Math.cos(currentAngle) * ast.orbitRadius;
-          ast.y = ast.baseY + Math.sin(currentAngle) * ast.orbitRadius;
+          // Continuous orbital revolution for belt asteroids: gently ease on hover or selection without jumping
+          const motionMultiplier = isAstHovered ? 0.25 : isAstSelected ? 0.25 : 1.0;
+          ast.orbitAngle = (ast.orbitAngle ?? 0) + (ast.orbitSpeed || 0.0016) * motionMultiplier;
+
+          const parentG = universeData.genres.find((g) => g.name === ast.parentGenre);
+          const originX = parentG ? parentG.x : (ast.baseX ?? 0);
+          const originY = parentG ? parentG.y : (ast.baseY ?? 0);
+
+          ast.x = originX + Math.cos(ast.orbitAngle) * ast.orbitRadius;
+          ast.y = originY + Math.sin(ast.orbitAngle) * ast.orbitRadius;
 
           const astCelestialCol = ast.celestialColor || getCelestialGenreColor(ast.parentGenre);
 
@@ -792,13 +803,12 @@ export const CelestialUniverseCanvas: React.FC<CelestialUniverseCanvasProps> = (
           const isMeteorSelected = selection?.type === 'meteor' && selection.item.id === meteor.id;
           const isMeteorHovered = currentHover?.type === 'meteor' && currentHover.item.id === meteor.id;
 
-          // Advance meteor progress along trajectory (paused on hover so user can easily interact)
-          if (!isMeteorHovered && !isMeteorSelected) {
-            meteor.progress += meteor.speed;
-            if (meteor.progress > 1.0) {
-              meteor.progress = 0.0;
-              meteor.history = [];
-            }
+          // Continuous meteor progress along trajectory, easing gently on hover or selection without getting stuck
+          const meteorDamp = isMeteorHovered ? 0.25 : isMeteorSelected ? 0.35 : 1.0;
+          meteor.progress += (meteor.speed || 0.0035) * meteorDamp;
+          if (meteor.progress >= 1.0) {
+            meteor.progress = 0.0;
+            meteor.history = [];
           }
 
           // Quadratic trajectory easing for organic gravitation
