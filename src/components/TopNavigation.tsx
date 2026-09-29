@@ -63,7 +63,7 @@ export const TopNavigation: React.FC<TopNavigationProps> = ({
           SymphonyGraph
         </span>
 
-        {/* Ambient Spotify stream status badge */}
+        {/* Ambient Spotify stream status badge with verified user identity */}
         {isConnected ? (
           <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-[var(--bg-surface)] border border-[var(--border-subtle)] text-[11px] font-mono text-[var(--text-secondary)]">
             <span
@@ -72,8 +72,10 @@ export const TopNavigation: React.FC<TopNavigationProps> = ({
                   ? 'bg-emerald-400 animate-pulse'
                   : spotifyStatus.state === 'rate_limited'
                   ? 'bg-amber-400'
-                  : spotifyStatus.state === 'offline'
+                  : spotifyStatus.state === 'error' || spotifyStatus.state === 'offline'
                   ? 'bg-rose-400'
+                  : spotifyStatus.state === 'empty_library'
+                  ? 'bg-amber-400'
                   : 'bg-emerald-500/60'
               }`}
             />
@@ -81,9 +83,14 @@ export const TopNavigation: React.FC<TopNavigationProps> = ({
               {playbackState?.isPlaying && playbackState.trackTitle
                 ? `${playbackState.trackTitle} · ${playbackState.artistName}`
                 : spotifyStatus.label}
+              {spotifyStatus.userName || spotifyStatus.userId ? (
+                <span className="text-[var(--text-tertiary)] ml-1 pl-1 border-l border-[var(--border-subtle)]">
+                  {spotifyStatus.userName || spotifyStatus.userId}
+                </span>
+              ) : null}
             </span>
             <span className="sm:hidden">
-              {isLive ? 'Live' : 'Synced'}
+              {isLive ? 'Live' : spotifyStatus.state === 'error' ? 'Error' : 'Synced'}
             </span>
 
             {onManualSpotifyRefresh && (

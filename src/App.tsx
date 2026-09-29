@@ -22,6 +22,7 @@ import { computeAnalytics } from './utils/analytics';
 import { generateDiscoveryRecommendations } from './utils/discoveryEngine';
 import { 
   getSpotifyToken, 
+  fetchSpotifyUserProfile,
   fetchSpotifyTopTracks, 
   fetchCurrentlyPlaying, 
   fetchRecentlyPlayedEvents,
@@ -37,7 +38,7 @@ import type {
   SpotifyPlaybackState,
   SpotifyStatusInfo,
 } from './types';
-import { SlidersHorizontal, Orbit, Network } from 'lucide-react';
+import { SlidersHorizontal, Orbit, Network, AlertCircle, RefreshCw } from 'lucide-react';
 
 function App() {
   const [records, setRecords] = useState<RawTrackRecord[]>(electronicData);
@@ -253,16 +254,23 @@ function App() {
     }
   };
 
-  // Disconnect Spotify session
+  // Disconnect Spotify session cleanly
   const handleDisconnectSpotify = useCallback(() => {
     clearTokens();
+    lastSyncAtRef.current = 0;
     setSpotifyStatus({
       state: 'disconnected',
       lastSyncAt: null,
       label: 'Spotify · Offline',
+      userId: undefined,
+      userName: undefined,
+      errorMessage: undefined,
     });
     setPlaybackState(null);
+    setListeningEvents([]);
+    // Restore default preset
     setPreset('electronic');
+    setRecords(electronicData);
   }, []);
 
   // Automatic Spotify session restoration & continuous polling loop
@@ -274,26 +282,86 @@ function App() {
       .then(async (token) => {
         if (!token || isCancelled) return;
 
+        // 1. Immediately isolate user mode: clear demo presets so no data leakage occurs
+        setPreset('spotify');
+        setRecords([]);
+        setListeningEvents([]);
+        lastSyncAtRef.current = 0;
+
         setSpotifyStatus({
           state: 'connecting',
           lastSyncAt: null,
           label: 'Spotify · Connecting',
         });
 
-        setPreset('spotify');
-
-        // Initial fetch of library
+        // 2. Identity Verification via /v1/me (never log tokens or credentials)
+        let profile = null;
         try {
-          const fetchedRecords = await fetchSpotifyTopTracks(token);
-          if (!isCancelled && fetchedRecords && fetchedRecords.length > 0) {
-            const db = normalizeMusicRecords(fetchedRecords, 'spotify');
-            setRecords(db.rawRecords);
-          }
-        } catch (err) {
-          console.warn('Spotify initial top tracks fetch error, keeping current preset:', err);
+          profile = await fetchSpotifyUserProfile(token);
+        } catch {
+          // Continue to attempt track fetch even if profile endpoint is restricted
         }
 
-        // Reconcile current playback and recently played
+        const userId = profile?.id;
+        const userName = profile?.display_name || (userId ? `User: ${userId}` : undefined);
+
+        if (!isCancelled) {
+          setSpotifyStatus((prev) => ({
+            ...prev,
+            userId,
+            userName,
+            label: userName ? `Spotify · ${userName}` : 'Spotify · Connected',
+          }));
+        }
+
+        // 3. Fetch user's personal top tracks
+        let fetchedRecords: RawTrackRecord[] = [];
+        let fetchFailed = false;
+        let fetchErrorMessage = '';
+
+        try {
+          fetchedRecords = await fetchSpotifyTopTracks(token);
+        } catch (err: unknown) {
+          fetchFailed = true;
+          fetchErrorMessage = err instanceof Error ? err.message : 'Could not retrieve top tracks';
+          console.warn('Spotify initial top tracks fetch error:', fetchErrorMessage);
+        }
+
+        if (isCancelled) return;
+
+        if (fetchFailed) {
+          // Show error state instead of silently falling back to electronicData
+          setRecords([]);
+          setSpotifyStatus((prev) => ({
+            ...prev,
+            state: 'error',
+            label: 'Spotify · Sync Failed',
+            errorMessage: fetchErrorMessage,
+          }));
+          return;
+        }
+
+        if (fetchedRecords.length === 0) {
+          // Show explicit empty library state instead of demo data
+          setRecords([]);
+          setSpotifyStatus((prev) => ({
+            ...prev,
+            state: 'empty_library',
+            label: 'Spotify · Empty Library',
+            errorMessage: 'No top tracks found for this Spotify account.',
+          }));
+        } else {
+          const db = normalizeMusicRecords(fetchedRecords, 'spotify');
+          setRecords(db.rawRecords);
+          setSpotifyStatus((prev) => ({
+            ...prev,
+            state: 'updated_recently',
+            lastSyncAt: Date.now(),
+            label: userName ? `Spotify · ${userName}` : 'Spotify · Synced',
+          }));
+        }
+
+        // 4. Reconcile current playback and recently played
         if (!isCancelled) {
           await reconcileSpotifyData(token);
         }
@@ -343,11 +411,12 @@ function App() {
         };
       })
       .catch((err) => {
-        console.warn('Spotify session error, continuing with cached universe:', err);
+        console.warn('Spotify session initialization error:', err instanceof Error ? err.message : String(err));
         setSpotifyStatus({
-          state: 'disconnected',
+          state: 'error',
           lastSyncAt: null,
-          label: 'Spotify · Offline',
+          label: 'Spotify · Error',
+          errorMessage: 'Failed to establish Spotify session',
         });
       });
 
@@ -594,6 +663,76 @@ function App() {
                 isDark={isDark}
               />
             </ReactFlowProvider>
+          )}
+
+          {/* Explicit Spotify Error or Empty Library State (never silent demo fallback) */}
+          {preset === 'spotify' && records.length === 0 && (
+            <div className="absolute inset-0 z-40 bg-[var(--bg-primary)]/90 backdrop-blur-md flex flex-col items-center justify-center p-6 text-center">
+              {spotifyStatus.state === 'connecting' ? (
+                <div className="flex flex-col items-center gap-3">
+                  <RefreshCw className="animate-spin text-emerald-400" size={28} />
+                  <h3 className="font-serif text-lg font-bold text-[var(--text-primary)]">
+                    Synchronizing Spotify Universe...
+                  </h3>
+                  <p className="text-xs text-[var(--text-secondary)] font-mono max-w-sm">
+                    {spotifyStatus.userName ? `Connected as ${spotifyStatus.userName}. ` : ''}
+                    Fetching top tracks and resolving sonic gravities.
+                  </p>
+                </div>
+              ) : spotifyStatus.state === 'error' ? (
+                <div className="flex flex-col items-center gap-3 max-w-md">
+                  <div className="w-10 h-10 rounded-full bg-rose-500/10 border border-rose-500/20 flex items-center justify-center text-rose-400">
+                    <AlertCircle size={22} />
+                  </div>
+                  <h3 className="font-serif text-xl font-bold text-[var(--text-primary)]">
+                    Spotify Synchronization Failed
+                  </h3>
+                  <p className="text-xs text-[var(--text-secondary)] font-sans leading-relaxed">
+                    {spotifyStatus.errorMessage || 'Unable to retrieve your Spotify top tracks. Verify your Spotify account has listening activity or reconnect.'}
+                  </p>
+                  <div className="flex items-center gap-3 mt-2">
+                    <button
+                      onClick={handleManualSpotifyRefresh}
+                      className="px-4 py-2 rounded-lg bg-[var(--text-primary)] text-[var(--bg-primary)] text-xs font-semibold hover:opacity-90 transition-opacity"
+                    >
+                      Retry Spotify Sync
+                    </button>
+                    <button
+                      onClick={() => handlePresetChange('electronic')}
+                      className="px-4 py-2 rounded-lg bg-[var(--bg-surface)] border border-[var(--border-primary)] text-xs font-medium text-[var(--text-secondary)] hover:text-[var(--text-primary)] transition-colors"
+                    >
+                      Explore Demo Universe
+                    </button>
+                  </div>
+                </div>
+              ) : spotifyStatus.state === 'empty_library' ? (
+                <div className="flex flex-col items-center gap-3 max-w-md">
+                  <div className="w-10 h-10 rounded-full bg-amber-500/10 border border-amber-500/20 flex items-center justify-center text-amber-400">
+                    <Orbit size={22} />
+                  </div>
+                  <h3 className="font-serif text-xl font-bold text-[var(--text-primary)]">
+                    No Personal Spotify History Found
+                  </h3>
+                  <p className="text-xs text-[var(--text-secondary)] font-sans leading-relaxed">
+                    Spotify returned no top tracks for this account yet. Play a few songs on Spotify or explore our curated presets.
+                  </p>
+                  <div className="flex items-center gap-3 mt-2">
+                    <button
+                      onClick={handleManualSpotifyRefresh}
+                      className="px-4 py-2 rounded-lg bg-[var(--text-primary)] text-[var(--bg-primary)] text-xs font-semibold hover:opacity-90 transition-opacity"
+                    >
+                      Check Again
+                    </button>
+                    <button
+                      onClick={() => handlePresetChange('electronic')}
+                      className="px-4 py-2 rounded-lg bg-[var(--bg-surface)] border border-[var(--border-primary)] text-xs font-medium text-[var(--text-secondary)] hover:text-[var(--text-primary)] transition-colors"
+                    >
+                      Load Demo Universe
+                    </button>
+                  </div>
+                </div>
+              ) : null}
+            </div>
           )}
         </div>
 

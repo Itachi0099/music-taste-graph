@@ -72,3 +72,12 @@ export interface SpotifyTokenEndpointResponse {
   expires_in: number;
   scope?: string;
 }
+
+export interface SpotifyUserProfile {
+  id: string;
+  display_name?: string | null;
+  email?: string;
+  product?: string;
+  country?: string;
+}
+

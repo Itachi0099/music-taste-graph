@@ -6,6 +6,7 @@ import type {
   SpotifySeveralArtistsPayload,
   SpotifyCurrentlyPlayingPayload,
   SpotifyTokenEndpointResponse,
+  SpotifyUserProfile,
 } from '../types/spotify';
 
 const DEFAULT_CLIENT_ID = '663e5f2a2950473ba037426e5343b8df';
@@ -36,8 +37,10 @@ export const getRedirectUri = (): string => {
   return SPOTIFY_REDIRECT_URI;
 };
 
-// Spotify Scopes for sync, current playback, recently played, and top tracks
+// Spotify Scopes for identity, sync, current playback, recently played, and top tracks
 export const SPOTIFY_SCOPES = [
+  'user-read-private',
+  'user-read-email',
   'user-top-read',
   'user-read-recently-played',
   'user-read-currently-playing',
@@ -374,6 +377,30 @@ async function resolveArtistGenres(artistNames: string[], knownGenreMap: Record<
 
   return knownGenreMap;
 }
+
+/**
+ * Fetches the authenticated user profile (/v1/me) to establish stable identity and isolation.
+ * Note: Never log access tokens, refresh tokens, cookies, or user credentials.
+ */
+export const fetchSpotifyUserProfile = async (token: string): Promise<SpotifyUserProfile | null> => {
+  try {
+    const res = await spotifyFetch('https://api.spotify.com/v1/me', token);
+    if (!res.ok) {
+      return null;
+    }
+    const data: SpotifyUserProfile = await res.json();
+    return {
+      id: data.id,
+      display_name: data.display_name || null,
+      email: data.email,
+      product: data.product,
+      country: data.country,
+    };
+  } catch (err) {
+    console.warn('Failed to fetch Spotify user profile:', err instanceof Error ? err.message : String(err));
+    return null;
+  }
+};
 
 /**
  * Fetches user's current Spotify playback state

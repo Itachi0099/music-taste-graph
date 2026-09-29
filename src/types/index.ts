@@ -108,7 +108,6 @@ export interface SpotifyPlaybackState {
   lastPolledAt: number;
 }
 
-// Spotify Connection Status
 export type SpotifyConnectionState = 
   | 'disconnected'
   | 'connecting'
@@ -116,13 +115,18 @@ export type SpotifyConnectionState =
   | 'updated_recently'
   | 'reconnecting'
   | 'rate_limited'
-  | 'offline';
+  | 'offline'
+  | 'error'
+  | 'empty_library';
 
 export interface SpotifyStatusInfo {
   state: SpotifyConnectionState;
   lastSyncAt: number | null;
   label: string;
   retryAfterSeconds?: number;
+  errorMessage?: string;
+  userId?: string;
+  userName?: string;
 }
 
 // -------------------------------------------------------------
