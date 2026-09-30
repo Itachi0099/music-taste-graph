@@ -88,6 +88,7 @@ export const CelestialUniverseCanvas: React.FC<CelestialUniverseCanvasProps> = (
 
   // Current progressive disclosure zoom level
   const [currentZoomLevel, setCurrentZoomLevel] = useState<1 | 2 | 3 | 4>(1);
+  const currentZoomLevelRef = useRef<1 | 2 | 3 | 4>(1);
 
   // Added tracks state for immediate visual feedback
   const [addedTrackTitles, setAddedTrackTitles] = useState<Set<string>>(new Set());
@@ -297,9 +298,11 @@ export const CelestialUniverseCanvas: React.FC<CelestialUniverseCanvasProps> = (
       } else if (selection?.type === 'genre') {
         activeLevel = Math.max(activeLevel, 2) as 2 | 3 | 4;
       }
-
-      setCurrentZoomLevel(activeLevel);
-
+      // Only update React state when zoom level actually transitions to prevent 60-120fps state dispatch loops
+      if (currentZoomLevelRef.current !== activeLevel) {
+        currentZoomLevelRef.current = activeLevel;
+        setCurrentZoomLevel(activeLevel);
+      }
       // Advance time for subtle celestial drift
       animTimeRef.current += 0.012;
       const time = animTimeRef.current;

@@ -56,6 +56,10 @@ function App() {
   });
   const [isRefreshingSpotify, setIsRefreshingSpotify] = useState<boolean>(false);
   const lastSyncAtRef = useRef<number>(0);
+  const recordsRef = useRef<RawTrackRecord[]>(records);
+  useEffect(() => {
+    recordsRef.current = records;
+  }, [records]);
 
   // Navigation & Progressive disclosure states
   const [viewFilter, setViewFilter] = useState<'all' | 'genres' | 'artists' | 'tracks'>('all');
@@ -220,7 +224,7 @@ function App() {
         lastSyncAtRef.current = now;
 
         setListeningEvents((prev) => {
-          const currentDb = normalizeMusicRecords(records, 'spotify');
+          const currentDb = normalizeMusicRecords(recordsRef.current, 'spotify');
           const { db, addedEvents } = ingestListeningEvents({ ...currentDb, listeningEvents: prev }, recentEvents);
           if (addedEvents.length > 0) {
             setRecords(db.rawRecords);
@@ -239,7 +243,7 @@ function App() {
     } finally {
       isReconcilingRef.current = false;
     }
-  }, [records]);
+  }, []);
 
   // Manual refresh Spotify trigger
   const handleManualSpotifyRefresh = async () => {

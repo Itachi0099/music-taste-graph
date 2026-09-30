@@ -305,8 +305,30 @@ export const getAccessTokenFromUrl = getSpotifyToken;
 let rateLimitResetTime = 0;
 let consecutiveAuthFailures = 0;
 
+// Dev-safe request instrumentation (timestamps and request sequence numbers, NEVER logging tokens)
+let requestSeq = 0;
+function logSpotifyRequest(endpoint: string) {
+  requestSeq++;
+  const timestamp = new Date().toISOString();
+  console.log(`[SpotifySync #${requestSeq}] [${timestamp}] Request: ${endpoint}`);
+}
+
+async function fetchWithTimeout(url: string, options: RequestInit = {}, timeoutMs = 8000): Promise<Response> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(url, {
+      ...options,
+      signal: controller.signal,
+    });
+    return res;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
 // Helper to make authenticated requests with bounded 401 retry & 429 backoff
-async function spotifyFetch(url: string, token: string): Promise<Response> {
+async function spotifyFetch(url: string, token: string, timeoutMs = 8000): Promise<Response> {
   const now = Date.now();
   if (now < rateLimitResetTime) {
     const waitSec = Math.ceil((rateLimitResetTime - now) / 1000);
@@ -316,22 +338,42 @@ async function spotifyFetch(url: string, token: string): Promise<Response> {
     });
   }
 
+  // Strip query params or tokens from log path to ensure no credentials or tokens are logged
+  const endpointPath = url.split('?')[0];
+  logSpotifyRequest(endpointPath);
+
   let activeToken = token;
-  let res = await fetch(url, {
-    headers: { Authorization: `Bearer ${activeToken}` },
-  });
+  let res: Response;
+  try {
+    res = await fetchWithTimeout(url, {
+      headers: { Authorization: `Bearer ${activeToken}` },
+    }, timeoutMs);
+  } catch (err: unknown) {
+    if (err instanceof Error && err.name === 'AbortError') {
+      throw new Error(`Spotify request timed out for ${endpointPath}`);
+    }
+    throw err;
+  }
 
   // Handle 401 Unauthorized -> Refresh token
   if (res.status === 401) {
     consecutiveAuthFailures++;
     if (consecutiveAuthFailures <= 2) {
+      logSpotifyRequest('/api/auth/spotify/refresh (re-authenticating)');
       const refreshed = await refreshSpotifyToken();
       if (refreshed) {
         activeToken = refreshed;
         consecutiveAuthFailures = 0;
-        res = await fetch(url, {
-          headers: { Authorization: `Bearer ${activeToken}` },
-        });
+        try {
+          res = await fetchWithTimeout(url, {
+            headers: { Authorization: `Bearer ${activeToken}` },
+          }, timeoutMs);
+        } catch (err: unknown) {
+          if (err instanceof Error && err.name === 'AbortError') {
+            throw new Error(`Spotify request timed out on retry for ${endpointPath}`);
+          }
+          throw err;
+        }
       }
     }
   } else {
@@ -361,7 +403,7 @@ async function resolveArtistGenres(artistNames: string[], knownGenreMap: Record<
   await Promise.allSettled(
     missing.slice(0, 20).map(async (artistName) => {
       try {
-        const res = await fetch(`https://itunes.apple.com/search?term=${encodeURIComponent(artistName)}&entity=musicArtist&limit=1`);
+        const res = await fetchWithTimeout(`https://itunes.apple.com/search?term=${encodeURIComponent(artistName)}&entity=musicArtist&limit=1`, {}, 3000);
         if (res.ok) {
           const itunesData = await res.json();
           const genre = itunesData.results?.[0]?.primaryGenreName;
@@ -370,7 +412,7 @@ async function resolveArtistGenres(artistNames: string[], knownGenreMap: Record<
           }
         }
       } catch {
-        // Ignore fallback errors
+        // Ignore fallback errors/timeouts
       }
     })
   );
