@@ -202,7 +202,7 @@ export const CelestialUniverseCanvas: React.FC<CelestialUniverseCanvasProps> = (
   }, [onSelect, triggerHyperspaceTravel]);
 
   const handleZoom = (delta: number) => {
-    const next = Math.max(0.2, Math.min(3.6, cameraRef.current.targetZoom + delta));
+    const next = Math.max(0.08, Math.min(3.6, cameraRef.current.targetZoom + delta));
     cameraRef.current.targetZoom = next;
   };
 
@@ -947,9 +947,28 @@ export const CelestialUniverseCanvas: React.FC<CelestialUniverseCanvasProps> = (
 
   const handleWheel = (e: React.WheelEvent<HTMLCanvasElement>) => {
     e.preventDefault();
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    const rect = canvas.getBoundingClientRect();
+    const mouseX = e.clientX - rect.left;
+    const mouseY = e.clientY - rect.top;
+    const centerX = canvas.clientWidth / 2;
+    const centerY = canvas.clientHeight / 2;
+
     const zoomFactor = e.deltaY < 0 ? 1.12 : 0.89;
-    const newZoom = Math.max(0.25, Math.min(3.6, cameraRef.current.targetZoom * zoomFactor));
-    cameraRef.current.targetZoom = newZoom;
+    const cam = cameraRef.current;
+    const oldZoom = cam.targetZoom;
+    const newZoom = Math.max(0.08, Math.min(3.6, oldZoom * zoomFactor));
+
+    if (newZoom !== oldZoom) {
+      // Keep the world coordinate under the pointer invariant during zoom
+      const wx = cam.targetX + (mouseX - centerX) / oldZoom;
+      const wy = cam.targetY + (mouseY - centerY) / oldZoom;
+      cam.targetX = wx - (mouseX - centerX) / newZoom;
+      cam.targetY = wy - (mouseY - centerY) / newZoom;
+      cam.targetZoom = newZoom;
+    }
   };
 
   return (
