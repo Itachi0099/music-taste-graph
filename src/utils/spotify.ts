@@ -393,7 +393,8 @@ async function spotifyFetch(url: string, token: string, timeoutMs = 8000): Promi
   return res;
 }
 
-// In-memory artist genre cache for the current browser session (never persisted to storage, cleared on reload)
+// In-memory artist genre cache for the current browser session (normalized lowercase key -> legitimate genre)
+// NEVER caches 'Unknown', empty strings, or temporary network failures.
 const inMemoryArtistGenreCache = new Map<string, string>();
 
 /**
@@ -403,22 +404,24 @@ async function resolveArtistGenres(artistNames: string[], knownGenreMap: Record<
   // 1. Seed session cache from any legitimate genres already present in knownGenreMap
   for (const [artist, genre] of Object.entries(knownGenreMap)) {
     if (genre && genre !== 'Unknown') {
-      inMemoryArtistGenreCache.set(artist, genre);
+      inMemoryArtistGenreCache.set(artist.trim().toLowerCase(), genre);
     }
   }
 
-  // 2. Resolve known artists from in-memory session cache first
+  // 2. Resolve known artists from in-memory session cache first (case-insensitive)
   for (const artistName of artistNames) {
-    if (!knownGenreMap[artistName] && inMemoryArtistGenreCache.has(artistName)) {
-      knownGenreMap[artistName] = inMemoryArtistGenreCache.get(artistName)!;
+    const key = artistName.trim().toLowerCase();
+    if (!knownGenreMap[artistName] && inMemoryArtistGenreCache.has(key)) {
+      knownGenreMap[artistName] = inMemoryArtistGenreCache.get(key)!;
     }
   }
 
-  // 3. Only query external fallback provider for artists not yet resolved
+  // 3. Only query external fallback provider for artists not yet resolved with a legitimate genre
   const missing = artistNames.filter((name) => {
     if (knownGenreMap[name] && knownGenreMap[name] !== 'Unknown') return false;
-    if (inMemoryArtistGenreCache.has(name)) {
-      knownGenreMap[name] = inMemoryArtistGenreCache.get(name)!;
+    const key = name.trim().toLowerCase();
+    if (inMemoryArtistGenreCache.has(key)) {
+      knownGenreMap[name] = inMemoryArtistGenreCache.get(key)!;
       return false;
     }
     return true;
@@ -426,33 +429,54 @@ async function resolveArtistGenres(artistNames: string[], knownGenreMap: Record<
 
   if (missing.length === 0) return knownGenreMap;
 
-  await Promise.allSettled(
-    missing.slice(0, 20).map(async (artistName) => {
-      try {
-        const res = await fetchWithTimeout(`https://itunes.apple.com/search?term=${encodeURIComponent(artistName)}&entity=musicArtist&limit=1`, {}, 3000);
-        if (res.ok) {
-          const itunesData = await res.json();
-          const genre = itunesData.results?.[0]?.primaryGenreName;
-          if (genre) {
-            knownGenreMap[artistName] = genre;
-            inMemoryArtistGenreCache.set(artistName, genre);
-            return;
+  // 4. Query fallback provider in bounded batches of 5 (respecting browser 6-socket pool limit)
+  const BATCH_SIZE = 5;
+  for (let i = 0; i < missing.length; i += BATCH_SIZE) {
+    const batch = missing.slice(i, i + BATCH_SIZE);
+    await Promise.allSettled(
+      batch.map(async (artistName) => {
+        try {
+          // Attempt 1: Exact artist name lookup
+          let res = await fetchWithTimeout(
+            `https://itunes.apple.com/search?term=${encodeURIComponent(artistName)}&entity=musicArtist&limit=1`,
+            {},
+            5000
+          );
+          let genre: string | undefined;
+
+          if (res.ok) {
+            const itunesData = await res.json();
+            genre = itunesData.results?.[0]?.primaryGenreName;
           }
+
+          // Attempt 2: If collaboration/delimiter present and no genre found, query primary artist
+          if (!genre && / feat\.?| ft\.?| vs\.?| & |,|\//i.test(artistName)) {
+            const primaryName = artistName.split(/ feat\.?| ft\.?| vs\.?| & |,|\//i)[0].trim();
+            if (primaryName && primaryName.toLowerCase() !== artistName.toLowerCase()) {
+              const res2 = await fetchWithTimeout(
+                `https://itunes.apple.com/search?term=${encodeURIComponent(primaryName)}&entity=musicArtist&limit=1`,
+                {},
+                5000
+              );
+              if (res2.ok) {
+                const itunesData2 = await res2.json();
+                genre = itunesData2.results?.[0]?.primaryGenreName;
+              }
+            }
+          }
+
+          // ONLY cache legitimate, positive resolved genres (never 'Unknown' or empty)
+          if (genre && genre !== 'Unknown' && genre.trim().length > 0) {
+            knownGenreMap[artistName] = genre;
+            inMemoryArtistGenreCache.set(artistName.trim().toLowerCase(), genre);
+          }
+        } catch {
+          // On network error or timeout: DO NOT poison cache with 'Unknown'.
+          // Transient failure allows subsequent retry rather than permanent Unknown lock.
         }
-        // Remember as Unknown for this session to avoid requesting on every 20s poll
-        inMemoryArtistGenreCache.set(artistName, 'Unknown');
-        if (!knownGenreMap[artistName]) {
-          knownGenreMap[artistName] = 'Unknown';
-        }
-      } catch {
-        // Record as Unknown on failure/timeout to prevent repeat request storm
-        inMemoryArtistGenreCache.set(artistName, 'Unknown');
-        if (!knownGenreMap[artistName]) {
-          knownGenreMap[artistName] = 'Unknown';
-        }
-      }
-    })
-  );
+      })
+    );
+  }
 
   return knownGenreMap;
 }
