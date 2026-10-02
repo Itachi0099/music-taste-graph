@@ -4,14 +4,80 @@
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>SymphonyGraph • Music Exploration</title>
+    <title>SymphonyGraph — Explore Your Music Taste as a Living Universe</title>
+    <meta
+      name="description"
+      content="Connect Spotify and explore your music taste as an interactive universe. Discover genre systems, orbiting artists, listening patterns and new music."
+    />
+    <link rel="canonical" href="https://music-taste-graph.vercel.app/" />
+    <meta name="robots" content="index, follow" />
+    <meta name="theme-color" content="#0E1015" />
+
+    <!-- Open Graph / Social Sharing -->
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="SymphonyGraph" />
+    <meta property="og:url" content="https://music-taste-graph.vercel.app/" />
+    <meta property="og:title" content="SymphonyGraph — Explore Your Music Taste as a Living Universe" />
+    <meta
+      property="og:description"
+      content="Connect Spotify and explore your music taste as an interactive universe. Discover genre systems, orbiting artists, listening patterns and new music."
+    />
+    <meta property="og:image" content="https://music-taste-graph.vercel.app/icons.svg" />
+
+    <!-- Twitter Card -->
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="SymphonyGraph — Explore Your Music Taste as a Living Universe" />
+    <meta
+      name="twitter:description"
+      content="Connect Spotify and explore your music taste as an interactive universe. Discover genre systems, orbiting artists, listening patterns and new music."
+    />
+    <meta name="twitter:image" content="https://music-taste-graph.vercel.app/icons.svg" />
+
+    <!-- Structured Data (JSON-LD) -->
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "WebApplication",
+        "name": "SymphonyGraph",
+        "url": "https://music-taste-graph.vercel.app/",
+        "description": "Connect Spotify and explore your music taste as an interactive universe. Discover genre systems, orbiting artists, listening patterns and new music.",
+        "applicationCategory": "MultimediaApplication",
+        "operatingSystem": "All",
+        "offers": {
+          "@type": "Offer",
+          "price": "0",
+          "priceCurrency": "USD"
+        }
+      }
+    </script>
+
     <!-- Editorial & Refined Typography -->
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Newsreader:ital,opsz,wght@0,6..72,300..700;1,6..72,300..600&family=Plus+Jakarta+Sans:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Newsreader:opsz,wght@6..72,400;6..72,600;6..72,700&family=Plus+Jakarta+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap"
+      rel="stylesheet"
+    />
   </head>
   <body class="bg-[#FAF9F5] text-[#161616] antialiased selection:bg-[#EAE6DF] selection:text-[#161616]">
-    <div id="root"></div>
+    <div id="root">
+      <noscript>
+        <main style="max-width: 640px; margin: 40px auto; padding: 24px; font-family: sans-serif; line-height: 1.6; color: #161616;">
+          <h1>SymphonyGraph</h1>
+          <p>
+            SymphonyGraph transforms your listening profile into an interactive, celestial music universe. Explore genre systems, orbiting artist planets, satellite tracks, and harmonic music discovery pathways.
+          </p>
+          <h2>Core Features</h2>
+          <ul>
+            <li><strong>Personal Celestial Universe:</strong> Visualize genres as luminous solar centers surrounded by orbiting artist systems and satellite tracks.</li>
+            <li><strong>Living Spotify Integration:</strong> Connect Spotify to map real-time playback, recently played events, and personal audio profiles.</li>
+            <li><strong>Harmonic Discovery:</strong> Uncover adjacent genres, bridge artists, and recommendations calibrated to your personal listening gravity.</li>
+            <li><strong>Classic Graph View:</strong> Switch seamlessly to interactive node networks with tempo, mood, and genre filtering.</li>
+          </ul>
+          <p><em>JavaScript is required to navigate the interactive universe canvas and audio visualizer.</em></p>
+        </main>
+      </noscript>
+    </div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

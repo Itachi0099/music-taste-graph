@@ -393,11 +393,37 @@ async function spotifyFetch(url: string, token: string, timeoutMs = 8000): Promi
   return res;
 }
 
+// In-memory artist genre cache for the current browser session (never persisted to storage, cleared on reload)
+const inMemoryArtistGenreCache = new Map<string, string>();
+
 /**
  * Resolves artist genres via open iTunes directory fallback if Spotify returns empty genres
  */
 async function resolveArtistGenres(artistNames: string[], knownGenreMap: Record<string, string>): Promise<Record<string, string>> {
-  const missing = artistNames.filter((name) => !knownGenreMap[name] || knownGenreMap[name] === 'Unknown');
+  // 1. Seed session cache from any legitimate genres already present in knownGenreMap
+  for (const [artist, genre] of Object.entries(knownGenreMap)) {
+    if (genre && genre !== 'Unknown') {
+      inMemoryArtistGenreCache.set(artist, genre);
+    }
+  }
+
+  // 2. Resolve known artists from in-memory session cache first
+  for (const artistName of artistNames) {
+    if (!knownGenreMap[artistName] && inMemoryArtistGenreCache.has(artistName)) {
+      knownGenreMap[artistName] = inMemoryArtistGenreCache.get(artistName)!;
+    }
+  }
+
+  // 3. Only query external fallback provider for artists not yet resolved
+  const missing = artistNames.filter((name) => {
+    if (knownGenreMap[name] && knownGenreMap[name] !== 'Unknown') return false;
+    if (inMemoryArtistGenreCache.has(name)) {
+      knownGenreMap[name] = inMemoryArtistGenreCache.get(name)!;
+      return false;
+    }
+    return true;
+  });
+
   if (missing.length === 0) return knownGenreMap;
 
   await Promise.allSettled(
@@ -409,10 +435,21 @@ async function resolveArtistGenres(artistNames: string[], knownGenreMap: Record<
           const genre = itunesData.results?.[0]?.primaryGenreName;
           if (genre) {
             knownGenreMap[artistName] = genre;
+            inMemoryArtistGenreCache.set(artistName, genre);
+            return;
           }
         }
+        // Remember as Unknown for this session to avoid requesting on every 20s poll
+        inMemoryArtistGenreCache.set(artistName, 'Unknown');
+        if (!knownGenreMap[artistName]) {
+          knownGenreMap[artistName] = 'Unknown';
+        }
       } catch {
-        // Ignore fallback errors/timeouts
+        // Record as Unknown on failure/timeout to prevent repeat request storm
+        inMemoryArtistGenreCache.set(artistName, 'Unknown');
+        if (!knownGenreMap[artistName]) {
+          knownGenreMap[artistName] = 'Unknown';
+        }
       }
     })
   );

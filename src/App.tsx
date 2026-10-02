@@ -1,19 +1,17 @@
-import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import { useState, useEffect, useRef, useMemo, useCallback, lazy, Suspense } from 'react';
 import { TopNavigation } from './components/TopNavigation';
 import { DetailsDrawer } from './components/DetailsDrawer';
-import { RecommendationsDrawer } from './components/RecommendationsDrawer';
 import { FilterPopover } from './components/FilterPopover';
-import { InsightsModal } from './components/InsightsModal';
-import { MainCanvas } from './components/canvas/MainCanvas';
 import { CelestialUniverseCanvas, type UniverseSelection } from './components/canvas/CelestialUniverseCanvas';
-import { DiscoveryPanel } from './components/DiscoveryPanel';
-import { ReactFlowProvider } from '@xyflow/react';
 import type { Node, Edge } from '@xyflow/react';
-import Papa from 'papaparse';
+
+// Lazy-loaded secondary components and graph canvas
+const MainCanvas = lazy(() => import('./components/canvas/MainCanvas'));
+const InsightsModal = lazy(() => import('./components/InsightsModal').then((m) => ({ default: m.InsightsModal })));
+const RecommendationsDrawer = lazy(() => import('./components/RecommendationsDrawer').then((m) => ({ default: m.RecommendationsDrawer })));
+const DiscoveryPanel = lazy(() => import('./components/DiscoveryPanel').then((m) => ({ default: m.DiscoveryPanel })));
 
 import electronicData from './data/electronic_club.json';
-import indieData from './data/indie_alternative.json';
-import eclecticData from './data/eclectic_mix.json';
 
 import { buildGraphFromRecords } from './utils/graphBuilder';
 import { getLayoutedElements } from './utils/layoutEngine';
@@ -60,6 +58,10 @@ function App() {
   useEffect(() => {
     recordsRef.current = records;
   }, [records]);
+  const listeningEventsRef = useRef<ListeningEvent[]>(listeningEvents);
+  useEffect(() => {
+    listeningEventsRef.current = listeningEvents;
+  }, [listeningEvents]);
 
   // Navigation & Progressive disclosure states
   const [viewFilter, setViewFilter] = useState<'all' | 'genres' | 'artists' | 'tracks'>('all');
@@ -130,20 +132,22 @@ function App() {
     const computed = computeAnalytics(filteredRecords);
     setSummary(computed);
 
-    const { nodes: initialNodes, edges: initialEdges } = buildGraphFromRecords(filteredRecords, {
-      expandedGenreIds,
-      expandedArtistIds,
-      activeViewFilter: viewFilter,
-    });
+    if (visualMode === 'graph') {
+      const { nodes: initialNodes, edges: initialEdges } = buildGraphFromRecords(filteredRecords, {
+        expandedGenreIds,
+        expandedArtistIds,
+        activeViewFilter: viewFilter,
+      });
 
-    const { nodes: layoutedNodes, edges: layoutedEdges } = getLayoutedElements(
-      initialNodes,
-      initialEdges
-    );
+      const { nodes: layoutedNodes, edges: layoutedEdges } = getLayoutedElements(
+        initialNodes,
+        initialEdges
+      );
 
-    setNodes(layoutedNodes);
-    setEdges(layoutedEdges);
-  }, [filteredRecords, viewFilter, expandedGenreIds, expandedArtistIds]);
+      setNodes(layoutedNodes);
+      setEdges(layoutedEdges);
+    }
+  }, [filteredRecords, viewFilter, expandedGenreIds, expandedArtistIds, visualMode]);
 
   // Compute Celestial Universe model with live listening events and playback
   const celestialUniverse = useMemo(() => {
@@ -191,18 +195,34 @@ function App() {
   }, [summary]);
 
   // Preset switching
-  const handlePresetChange = (newPreset: string) => {
+  const handlePresetChange = async (newPreset: string) => {
     setPreset(newPreset);
     setSelectedNode(null);
     setExpandedGenreIds(new Set());
     setExpandedArtistIds(new Set());
 
-    if (newPreset === 'electronic') setRecords(electronicData);
-    else if (newPreset === 'indie') setRecords(indieData);
-    else if (newPreset === 'eclectic') setRecords(eclecticData);
+    if (newPreset === 'electronic') {
+      setRecords(electronicData);
+    } else if (newPreset === 'indie') {
+      const data = await import('./data/indie_alternative.json');
+      setRecords(data.default);
+    } else if (newPreset === 'eclectic') {
+      const data = await import('./data/eclectic_mix.json');
+      setRecords(data.default);
+    }
   };
 
   const isReconcilingRef = useRef(false);
+  const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const isSpotifyActiveRef = useRef<boolean>(false);
+
+  // Stop polling interval cleanly
+  const stopPolling = useCallback(() => {
+    if (pollIntervalRef.current) {
+      clearInterval(pollIntervalRef.current);
+      pollIntervalRef.current = null;
+    }
+  }, []);
 
   // Reconcile Spotify events incrementally with overlap protection (R-03)
   const reconcileSpotifyData = useCallback(async (token: string) => {
@@ -223,27 +243,62 @@ function App() {
         const now = Date.now();
         lastSyncAtRef.current = now;
 
-        setListeningEvents((prev) => {
-          const currentDb = normalizeMusicRecords(recordsRef.current, 'spotify');
-          const { db, addedEvents } = ingestListeningEvents({ ...currentDb, listeningEvents: prev }, recentEvents);
-          if (addedEvents.length > 0) {
-            setRecords(db.rawRecords);
-          }
-          return db.listeningEvents;
-        });
+        const currentDb = normalizeMusicRecords(recordsRef.current, 'spotify');
+        const { db, addedEvents } = ingestListeningEvents(
+          { ...currentDb, listeningEvents: listeningEventsRef.current },
+          recentEvents
+        );
+
+        if (addedEvents.length > 0) {
+          setRecords(db.rawRecords);
+          setListeningEvents(db.listeningEvents);
+        }
       }
 
-      setSpotifyStatus({
+      // 3. Preserve existing status properties (including verified userId and userName)
+      setSpotifyStatus((prev) => ({
+        ...prev,
         state: current?.isPlaying ? 'live' : 'updated_recently',
         lastSyncAt: Date.now(),
-        label: current?.isPlaying ? 'Spotify · Live' : 'Spotify · Synced',
-      });
+        label: prev.userName
+          ? `Spotify · ${prev.userName}`
+          : current?.isPlaying
+            ? 'Spotify · Live'
+            : 'Spotify · Synced',
+      }));
     } catch (err) {
       console.warn('Spotify reconcile error (keeping local universe intact):', err);
     } finally {
       isReconcilingRef.current = false;
     }
   }, []);
+
+  // Setup background polling (every 20s while tab is visible)
+  const startPolling = useCallback(() => {
+    // Clear any existing interval to guarantee at most ONE active interval
+    if (pollIntervalRef.current) {
+      clearInterval(pollIntervalRef.current);
+      pollIntervalRef.current = null;
+    }
+    if (document.hidden) return; // Do not poll while document is hidden
+
+    pollIntervalRef.current = setInterval(async () => {
+      if (document.hidden) return;
+      const activeToken = await getSpotifyToken();
+      if (activeToken) {
+        await reconcileSpotifyData(activeToken);
+      } else {
+        isSpotifyActiveRef.current = false;
+        setSpotifyStatus((prev) => ({
+          ...prev,
+          state: 'disconnected',
+          lastSyncAt: null,
+          label: 'Spotify · Offline',
+        }));
+        stopPolling();
+      }
+    }, 20000);
+  }, [reconcileSpotifyData, stopPolling]);
 
   // Manual refresh Spotify trigger
   const handleManualSpotifyRefresh = async () => {
@@ -260,6 +315,8 @@ function App() {
 
   // Disconnect Spotify session cleanly
   const handleDisconnectSpotify = useCallback(() => {
+    isSpotifyActiveRef.current = false;
+    stopPolling();
     clearTokens();
     lastSyncAtRef.current = 0;
     setSpotifyStatus({
@@ -275,18 +332,50 @@ function App() {
     // Restore default preset
     setPreset('electronic');
     setRecords(electronicData);
-  }, []);
+  }, [stopPolling]);
 
   // Automatic Spotify session restoration & continuous polling loop
   useEffect(() => {
     let isCancelled = false;
-    let pollInterval: NodeJS.Timeout | null = null;
 
+    // Page Visibility API handler: registered synchronously, cleaned up synchronously
+    const handleVisibilityChange = async () => {
+      if (isCancelled || !isSpotifyActiveRef.current) return;
+
+      if (document.hidden) {
+        stopPolling();
+      } else {
+        stopPolling();
+        const activeToken = await getSpotifyToken();
+        if (isCancelled || !isSpotifyActiveRef.current) return;
+        if (activeToken) {
+          await reconcileSpotifyData(activeToken);
+          if (!isCancelled && isSpotifyActiveRef.current) {
+            startPolling();
+          }
+        } else {
+          isSpotifyActiveRef.current = false;
+          setSpotifyStatus((prev) => ({
+            ...prev,
+            state: 'disconnected',
+            lastSyncAt: null,
+            label: 'Spotify · Offline',
+          }));
+        }
+      }
+    };
+
+    // 1. Synchronously register visibility listener
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    // 2. Initialize session
     getSpotifyToken()
       .then(async (token) => {
         if (!token || isCancelled) return;
 
-        // 1. Immediately isolate user mode: clear demo presets so no data leakage occurs
+        isSpotifyActiveRef.current = true;
+
+        // Immediately isolate user mode: clear demo presets so no data leakage occurs
         setPreset('spotify');
         setRecords([]);
         setListeningEvents([]);
@@ -298,7 +387,7 @@ function App() {
           label: 'Spotify · Connecting',
         });
 
-        // 2. Identity Verification via /v1/me (never log tokens or credentials)
+        // Identity Verification via /v1/me (never log tokens or credentials)
         let profile = null;
         try {
           profile = await fetchSpotifyUserProfile(token);
@@ -318,7 +407,7 @@ function App() {
           }));
         }
 
-        // 3. Fetch user's personal top tracks
+        // Fetch user's personal top tracks
         let fetchedRecords: RawTrackRecord[] = [];
         let fetchFailed = false;
         let fetchErrorMessage = '';
@@ -365,56 +454,17 @@ function App() {
           }));
         }
 
-        // 4. Reconcile current playback and recently played
+        // Reconcile current playback and recently played
         if (!isCancelled) {
           await reconcileSpotifyData(token);
         }
 
-        // Setup background polling (every 20s while tab is visible)
-        const setupPolling = () => {
-          if (pollInterval) clearInterval(pollInterval);
-          if (document.hidden) return; // Pause when hidden
-
-          pollInterval = setInterval(async () => {
-            if (!document.hidden && !isCancelled) {
-              const activeToken = await getSpotifyToken();
-              if (activeToken) {
-                await reconcileSpotifyData(activeToken);
-              } else {
-                setSpotifyStatus({
-                  state: 'disconnected',
-                  lastSyncAt: null,
-                  label: 'Spotify · Offline',
-                });
-                if (pollInterval) clearInterval(pollInterval);
-              }
-            }
-          }, 20000);
-        };
-
-        setupPolling();
-
-        // Page Visibility API handler
-        const handleVisibilityChange = async () => {
-          if (document.hidden) {
-            if (pollInterval) clearInterval(pollInterval);
-          } else {
-            // User returned to tab: immediately reconcile
-            const activeToken = await getSpotifyToken();
-            if (activeToken) {
-              await reconcileSpotifyData(activeToken);
-            }
-            setupPolling();
-          }
-        };
-
-        document.addEventListener('visibilitychange', handleVisibilityChange);
-
-        return () => {
-          document.removeEventListener('visibilitychange', handleVisibilityChange);
-        };
+        if (!isCancelled && isSpotifyActiveRef.current) {
+          startPolling();
+        }
       })
       .catch((err) => {
+        isSpotifyActiveRef.current = false;
         console.warn('Spotify session initialization error:', err instanceof Error ? err.message : String(err));
         setSpotifyStatus({
           state: 'error',
@@ -424,11 +474,13 @@ function App() {
         });
       });
 
+    // 3. Synchronous cleanup returned directly from useEffect
     return () => {
       isCancelled = true;
-      if (pollInterval) clearInterval(pollInterval);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      stopPolling();
     };
-  }, [reconcileSpotifyData]);
+  }, [reconcileSpotifyData, startPolling, stopPolling]);
 
   // Add discovery item into graph
   const handleAddRecommendation = (item: RecommendationItem) => {
@@ -453,21 +505,23 @@ function App() {
     if (!file) return;
 
     if (file.name.endsWith('.csv')) {
-      Papa.parse(file, {
-        header: true,
-        dynamicTyping: true,
-        skipEmptyLines: true,
-        complete: (results) => {
-          const rawMapped: RawTrackRecord[] = results.data.map((row: any) => ({
-            track: row.track || row.title || row.song || 'Unknown',
-            artist: row.artist || 'Unknown Artist',
-            genre: row.genre || 'Unknown Genre',
-            bpm: typeof row.bpm === 'number' ? row.bpm : typeof row.tempo === 'number' ? row.tempo : null,
-          }));
-          const db = normalizeMusicRecords(rawMapped, 'csv');
-          setPreset('');
-          setRecords(db.rawRecords);
-        },
+      import('papaparse').then(({ default: Papa }) => {
+        Papa.parse(file, {
+          header: true,
+          dynamicTyping: true,
+          skipEmptyLines: true,
+          complete: (results) => {
+            const rawMapped: RawTrackRecord[] = results.data.map((row: any) => ({
+              track: row.track || row.title || row.song || 'Unknown',
+              artist: row.artist || 'Unknown Artist',
+              genre: row.genre || 'Unknown Genre',
+              bpm: typeof row.bpm === 'number' ? row.bpm : typeof row.tempo === 'number' ? row.tempo : null,
+            }));
+            const db = normalizeMusicRecords(rawMapped, 'csv');
+            setPreset('');
+            setRecords(db.rawRecords);
+          },
+        });
       });
     } else if (file.name.endsWith('.json')) {
       const reader = new FileReader();
@@ -642,7 +696,13 @@ function App() {
               isDark={isDark}
             />
           ) : (
-            <ReactFlowProvider>
+            <Suspense
+              fallback={
+                <div className="w-full h-full flex items-center justify-center text-xs font-mono text-[var(--text-muted)] bg-[var(--bg-primary)]">
+                  Loading Graph Engine...
+                </div>
+              }
+            >
               <MainCanvas
                 initialNodes={nodes}
                 initialEdges={edges}
@@ -666,7 +726,7 @@ function App() {
                 searchQuery={searchQuery}
                 isDark={isDark}
               />
-            </ReactFlowProvider>
+            </Suspense>
           )}
 
           {/* Explicit Spotify Error or Empty Library State (never silent demo fallback) */}
@@ -741,17 +801,19 @@ function App() {
         </div>
 
         {/* Discovery Panel */}
-        <DiscoveryPanel
-          isOpen={isDiscoverPanelOpen}
-          onClose={() => setIsDiscoverPanelOpen(false)}
-          discoveries={celestialUniverse.discoveries || []}
-          activeCategory={discoveryCategoryFilter}
-          onCategoryChange={setDiscoveryCategoryFilter}
-          onSelectDiscovery={(disc) => {
-            setVisualMode('universe');
-            setUniverseSelection({ type: 'discovery', item: disc });
-          }}
-        />
+        <Suspense fallback={null}>
+          <DiscoveryPanel
+            isOpen={isDiscoverPanelOpen}
+            onClose={() => setIsDiscoverPanelOpen(false)}
+            discoveries={celestialUniverse.discoveries || []}
+            activeCategory={discoveryCategoryFilter}
+            onCategoryChange={setDiscoveryCategoryFilter}
+            onSelectDiscovery={(disc) => {
+              setVisualMode('universe');
+              setUniverseSelection({ type: 'discovery', item: disc });
+            }}
+          />
+        </Suspense>
 
         {/* Contextual Right Drawer for Selected Node */}
         <DetailsDrawer
@@ -773,16 +835,18 @@ function App() {
         />
 
         {/* Contextual Recommendations Drawer */}
-        <RecommendationsDrawer
-          isOpen={isRecommendationsOpen}
-          onClose={() => setIsRecommendationsOpen(false)}
-          recommendations={recommendations}
-          selectedMood={selectedMoodFilter}
-          onSelectMood={setSelectedMoodFilter}
-          availableMoods={availableMoods}
-          onAddRecommendation={handleAddRecommendation}
-          isDark={isDark}
-        />
+        <Suspense fallback={null}>
+          <RecommendationsDrawer
+            isOpen={isRecommendationsOpen}
+            onClose={() => setIsRecommendationsOpen(false)}
+            recommendations={recommendations}
+            selectedMood={selectedMoodFilter}
+            onSelectMood={setSelectedMoodFilter}
+            availableMoods={availableMoods}
+            onAddRecommendation={handleAddRecommendation}
+            isDark={isDark}
+          />
+        </Suspense>
 
         {/* Filter Popover */}
         <FilterPopover
@@ -803,12 +867,14 @@ function App() {
         />
 
         {/* Secondary Insights Modal */}
-        <InsightsModal
-          isOpen={isInsightsOpen}
-          onClose={() => setIsInsightsOpen(false)}
-          summary={summary}
-          isDark={isDark}
-        />
+        <Suspense fallback={null}>
+          <InsightsModal
+            isOpen={isInsightsOpen}
+            onClose={() => setIsInsightsOpen(false)}
+            summary={summary}
+            isDark={isDark}
+          />
+        </Suspense>
       </main>
     </div>
   );

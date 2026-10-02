@@ -2,6 +2,7 @@ import React, { useCallback, useMemo, useEffect, useRef } from 'react';
 import {
   ReactFlow,
   Controls,
+  ReactFlowProvider,
   useNodesState,
   useEdgesState,
   useReactFlow,
@@ -24,7 +25,7 @@ interface MainCanvasProps {
   isDark?: boolean;
 }
 
-export const MainCanvas: React.FC<MainCanvasProps> = ({ 
+const MainCanvasInner: React.FC<MainCanvasProps> = ({ 
   initialNodes, 
   initialEdges, 
   selectedNode,
@@ -201,3 +202,11 @@ export const MainCanvas: React.FC<MainCanvasProps> = ({
     </div>
   );
 };
+
+export const MainCanvas: React.FC<MainCanvasProps> = (props) => (
+  <ReactFlowProvider>
+    <MainCanvasInner {...props} />
+  </ReactFlowProvider>
+);
+
+export default MainCanvas;
