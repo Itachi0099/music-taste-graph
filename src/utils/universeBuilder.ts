@@ -241,17 +241,25 @@ export function buildCelestialUniverse(
     ? playbackState.trackTitle.toLowerCase()
     : null;
 
-  // Track recency factor for each artist from listening events and playback
+  // Track recency factor for each artist and track from listening events and playback
   const recentArtistActivity = new Map<string, number>();
+  const recentTrackActivity = new Map<string, number>();
   if (listeningEvents && listeningEvents.length > 0) {
     listeningEvents.slice(0, 30).forEach((evt, idx) => {
       const a = evt.artistName.toLowerCase();
       const weight = Math.max(0.15, 1.0 - idx * 0.035);
       recentArtistActivity.set(a, Math.max(recentArtistActivity.get(a) || 0, weight));
+
+      const tKey = `${a}:::${evt.trackTitle.toLowerCase()}`;
+      recentTrackActivity.set(tKey, Math.max(recentTrackActivity.get(tKey) || 0, weight));
     });
   }
   if (playbackState?.isPlaying && playbackState.artistName) {
-    recentArtistActivity.set(playbackState.artistName.toLowerCase(), 1.6);
+    const a = playbackState.artistName.toLowerCase();
+    recentArtistActivity.set(a, 1.6);
+    if (playbackState.trackTitle) {
+      recentTrackActivity.set(`${a}:::${playbackState.trackTitle.toLowerCase()}`, 2.0);
+    }
   }
 
   // Group artists by whether they are cross-genre bridges or belong primarily to a genre system
@@ -399,6 +407,8 @@ export function buildCelestialUniverse(
           ? t.track.toLowerCase().includes(currentlyPlayingTrackLower) || currentlyPlayingTrackLower.includes(t.track.toLowerCase())
           : false;
 
+        const tRecency = recentTrackActivity.get(`${meta.artistName.toLowerCase()}:::${t.track.toLowerCase()}`) || (isTrackPlaying ? 1.5 : 0);
+
         const trackObj: UniverseTrack = {
           id: `track-${t.track.toLowerCase().replace(/[^a-z0-9]/g, '-')}-${tIdx}`,
           title: t.track,
@@ -417,6 +427,8 @@ export function buildCelestialUniverse(
           spotifyUrl: t.spotifyUrl,
           celestialColor: parentSystem.celestialColor,
           isCurrentlyPlaying: isTrackPlaying,
+          isRecentlyPlayed: tRecency > 0,
+          recencyFactor: tRecency,
         };
 
         allTracksList.push(trackObj);
@@ -494,6 +506,8 @@ export function buildCelestialUniverse(
         ? t.track.toLowerCase().includes(currentlyPlayingTrackLower) || currentlyPlayingTrackLower.includes(t.track.toLowerCase())
         : false;
 
+      const tRecency = recentTrackActivity.get(`${meta.artistName.toLowerCase()}:::${t.track.toLowerCase()}`) || (isTrackPlaying ? 1.5 : 0);
+
       const trackObj: UniverseTrack = {
         id: `track-${t.track.toLowerCase().replace(/[^a-z0-9]/g, '-')}-${tIdx}`,
         title: t.track,
@@ -512,6 +526,8 @@ export function buildCelestialUniverse(
         spotifyUrl: t.spotifyUrl,
         celestialColor: gA.celestialColor,
         isCurrentlyPlaying: isTrackPlaying,
+        isRecentlyPlayed: tRecency > 0,
+        recencyFactor: tRecency,
       };
 
       allTracksList.push(trackObj);
@@ -717,7 +733,43 @@ export function buildCelestialUniverse(
   const meteorsList: UniverseMeteor[] = [];
   const now = Date.now();
 
-  // 7A. Real Listening Events as Active Meteors
+  // 7A. Real Listening Events / Currently Playing as Active Meteors
+  if (playbackState?.isPlaying && playbackState.trackTitle && playbackState.artistName) {
+    const pGenre = playbackState.genre || (records.find((r) => r.artist.toLowerCase() === playbackState.artistName?.toLowerCase())?.genre) || genreSystems[0]?.name || 'Unknown';
+    const targetG = genreSystems.find((g) => g.name.toLowerCase() === pGenre.toLowerCase()) || genreSystems[0];
+    if (targetG) {
+      const col = getCelestialGenreColor(pGenre);
+      const angle = 0.8;
+      const startX = targetG.x + Math.cos(angle) * 480;
+      const startY = targetG.y + Math.sin(angle) * 480;
+
+      meteorsList.push({
+        id: `meteor-currently-playing-${playbackState.trackTitle.toLowerCase().replace(/[^a-z0-9]/g, '-')}`,
+        title: playbackState.trackTitle,
+        artist: playbackState.artistName,
+        genre: pGenre,
+        subgenre: undefined,
+        eventType: 'recently_played',
+        reason: `Live playback: currently active in ${targetG.name}`,
+        sourceGenre: 'Live Stream',
+        targetGenre: targetG.name,
+        startX,
+        startY,
+        targetX: targetG.x,
+        targetY: targetG.y,
+        currentX: startX,
+        currentY: startY,
+        speed: 0.0042,
+        progress: 0.35,
+        trailLength: 36,
+        history: [],
+        color: col.primary,
+        celestialColor: col,
+        createdAt: now,
+      });
+    }
+  }
+
   if (listeningEvents && listeningEvents.length > 0) {
     listeningEvents.slice(0, 4).forEach((evt, eIdx) => {
       const targetG = genreSystems.find((g) => g.name.toLowerCase() === evt.genre.toLowerCase()) || genreSystems[0];

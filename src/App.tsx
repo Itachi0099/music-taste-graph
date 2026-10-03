@@ -40,8 +40,6 @@ import { SlidersHorizontal, Orbit, Network, AlertCircle, RefreshCw } from 'lucid
 
 function App() {
   const [records, setRecords] = useState<RawTrackRecord[]>(electronicData);
-  const [nodes, setNodes] = useState<Node[]>([]);
-  const [edges, setEdges] = useState<Edge[]>([]);
   const [preset, setPreset] = useState<string>('electronic');
   
   // Normalized Listening Events & Playback State
@@ -82,7 +80,6 @@ function App() {
   const [selectedMoodFilter, setSelectedMoodFilter] = useState<string>('all');
   const [minBpm, setMinBpm] = useState<number>(60);
   const [maxBpm, setMaxBpm] = useState<number>(200);
-  const [summary, setSummary] = useState<TasteSummary | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   
   // Visual Mode: 'universe' (Personal Celestial Universe) vs 'graph' (Classic Graph)
@@ -127,26 +124,28 @@ function App() {
     });
   }, [records, selectedGenreFilter, selectedMoodFilter, minBpm, maxBpm]);
 
-  // Update layout when records, view filters, or progressive disclosures change
-  useEffect(() => {
-    const computed = computeAnalytics(filteredRecords);
-    setSummary(computed);
+  // Compute analytics summary directly with useMemo (prevents cascading re-renders)
+  const summary = useMemo<TasteSummary | null>(() => {
+    return computeAnalytics(filteredRecords);
+  }, [filteredRecords]);
 
-    if (visualMode === 'graph') {
-      const { nodes: initialNodes, edges: initialEdges } = buildGraphFromRecords(filteredRecords, {
-        expandedGenreIds,
-        expandedArtistIds,
-        activeViewFilter: viewFilter,
-      });
-
-      const { nodes: layoutedNodes, edges: layoutedEdges } = getLayoutedElements(
-        initialNodes,
-        initialEdges
-      );
-
-      setNodes(layoutedNodes);
-      setEdges(layoutedEdges);
+  // Derive classic graph layout only when in graph mode and dependencies change
+  const { nodes, edges } = useMemo(() => {
+    if (visualMode !== 'graph') {
+      return { nodes: [] as Node[], edges: [] as Edge[] };
     }
+    const { nodes: initialNodes, edges: initialEdges } = buildGraphFromRecords(filteredRecords, {
+      expandedGenreIds,
+      expandedArtistIds,
+      activeViewFilter: viewFilter,
+    });
+
+    const { nodes: layoutedNodes, edges: layoutedEdges } = getLayoutedElements(
+      initialNodes,
+      initialEdges
+    );
+
+    return { nodes: layoutedNodes, edges: layoutedEdges };
   }, [filteredRecords, viewFilter, expandedGenreIds, expandedArtistIds, visualMode]);
 
   // Compute Celestial Universe model with live listening events and playback

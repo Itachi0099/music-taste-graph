@@ -281,6 +281,8 @@ export interface UniverseTrack {
   spotifyUrl?: string;
   celestialColor?: import('../utils/celestialColors').CelestialColorIdentity;
   isCurrentlyPlaying?: boolean;
+  isRecentlyPlayed?: boolean;
+  recencyFactor?: number;
 }
 
 export type AsteroidType = 'obscure_artist' | 'track_cluster' | 'niche_subgenre' | 'cross_genre' | 'peripheral_track';

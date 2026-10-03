@@ -657,6 +657,7 @@ export const CelestialUniverseCanvas: React.FC<CelestialUniverseCanvasProps> = (
                 isDimmed: finalTrackDim,
                 isDark,
                 isCurrentlyPlaying: track.isCurrentlyPlaying,
+                isRecentlyPlayed: track.isRecentlyPlayed,
               });
 
               if (cam.zoom >= 1.7 || isTrackSelected || isArtistSelected) {

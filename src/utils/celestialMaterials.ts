@@ -374,19 +374,30 @@ export function renderTrackStar(
     isDimmed: boolean;
     isDark?: boolean;
     isCurrentlyPlaying?: boolean;
+    isRecentlyPlayed?: boolean;
   }
 ) {
-  const { x, y, celestialColor, isSelected, isHovered, isDimmed, isDark = true, isCurrentlyPlaying = false } = params;
+  const {
+    x,
+    y,
+    celestialColor,
+    isSelected,
+    isHovered,
+    isDimmed,
+    isDark = true,
+    isCurrentlyPlaying = false,
+    isRecentlyPlayed = false,
+  } = params;
   const { glowRgb, coreRgb } = celestialColor;
 
   const dimFactor = isDimmed ? 0.22 : 1.0;
-  const radius = isSelected ? 4.8 : isCurrentlyPlaying ? 4.2 : isHovered ? 3.6 : 2.6;
+  const radius = isSelected ? 4.8 : isCurrentlyPlaying ? 4.2 : isHovered ? 3.6 : isRecentlyPlayed ? 3.0 : 2.6;
 
   // Selected, hovered, or currently playing gets an active aura
-  if (isSelected || isHovered || isCurrentlyPlaying) {
-    const auraRad = radius * (isCurrentlyPlaying ? 3.2 : 2.6);
+  if (isSelected || isHovered || isCurrentlyPlaying || (isRecentlyPlayed && !isDimmed)) {
+    const auraRad = radius * (isCurrentlyPlaying ? 3.2 : isRecentlyPlayed ? 2.0 : 2.6);
     const grad = ctx.createRadialGradient(x, y, radius * 0.4, x, y, auraRad);
-    grad.addColorStop(0, `rgba(${glowRgb}, ${0.5 * dimFactor})`);
+    grad.addColorStop(0, `rgba(${glowRgb}, ${(isCurrentlyPlaying ? 0.5 : isRecentlyPlayed ? 0.28 : 0.4) * dimFactor})`);
     grad.addColorStop(1, 'transparent');
     ctx.fillStyle = grad;
     ctx.beginPath();
@@ -401,8 +412,8 @@ export function renderTrackStar(
     ctx.fillStyle = isDark ? '#FFFFFF' : '#111215';
   } else {
     ctx.fillStyle = isDark
-      ? (isDimmed ? 'rgba(70, 75, 85, 0.4)' : `rgba(${coreRgb}, 0.88)`)
-      : (isDimmed ? 'rgba(180, 185, 195, 0.5)' : `rgba(${glowRgb}, 0.85)`);
+      ? (isDimmed ? 'rgba(70, 75, 85, 0.4)' : isRecentlyPlayed ? '#FFFFFF' : `rgba(${coreRgb}, 0.88)`)
+      : (isDimmed ? 'rgba(180, 185, 195, 0.5)' : isRecentlyPlayed ? `rgba(${coreRgb}, 0.98)` : `rgba(${glowRgb}, 0.85)`);
   }
   ctx.fill();
 
