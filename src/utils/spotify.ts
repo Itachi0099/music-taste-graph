@@ -13,6 +13,7 @@ import {
   classifyCanonicalGenre,
   diagnoseArtistGenre,
 } from './genreClassifier';
+import { verifyExternalArtistIdentity } from './genreKnowledge';
 
 export { SpotifyApiError, classifySpotifyStatus, getSpotifyStatusLabel, logSpotifySyncDiagnostic } from './spotifyError';
 export {
@@ -581,9 +582,14 @@ export async function resolveArtistGenres(
                 const songData = await songRes.json();
                 const songItem = songData.results?.[0];
                 if (songItem && songItem.primaryGenreName) {
-                  const songArtist = (songItem.artistName || '').toLowerCase();
-                  const targetName = artistName.toLowerCase();
-                  if (songArtist.includes(targetName) || targetName.includes(songArtist)) {
+                  const verification = verifyExternalArtistIdentity(
+                    artistName,
+                    songItem.artistName || '',
+                    trackTitle,
+                    songItem.trackName || '',
+                    songItem.primaryGenreName
+                  );
+                  if (verification.isVerified) {
                     resolvedGenre = songItem.primaryGenreName;
                   }
                 }
@@ -605,9 +611,14 @@ export async function resolveArtistGenres(
                 const itunesData = await res.json();
                 const artistItem = itunesData.results?.[0];
                 if (artistItem?.primaryGenreName) {
-                  const itunesArtistName = (artistItem.artistName || '').toLowerCase();
-                  const targetName = artistName.toLowerCase();
-                  if (itunesArtistName.includes(targetName) || targetName.includes(itunesArtistName)) {
+                  const verification = verifyExternalArtistIdentity(
+                    artistName,
+                    artistItem.artistName || '',
+                    trackTitle,
+                    undefined,
+                    artistItem.primaryGenreName
+                  );
+                  if (verification.isVerified) {
                     resolvedGenre = artistItem.primaryGenreName;
                   }
                 }
@@ -629,7 +640,19 @@ export async function resolveArtistGenres(
                 );
                 if (res2.ok) {
                   const itunesData2 = await res2.json();
-                  resolvedGenre = itunesData2.results?.[0]?.primaryGenreName;
+                  const artistItem2 = itunesData2.results?.[0];
+                  if (artistItem2?.primaryGenreName) {
+                    const verification = verifyExternalArtistIdentity(
+                      primaryName,
+                      artistItem2.artistName || '',
+                      trackTitle,
+                      undefined,
+                      artistItem2.primaryGenreName
+                    );
+                    if (verification.isVerified) {
+                      resolvedGenre = artistItem2.primaryGenreName;
+                    }
+                  }
                 }
               } catch {
                 // Ignore

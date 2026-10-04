@@ -24,6 +24,7 @@ import {
 } from '../src/utils/spotify.js';
 import { normalizeMusicRecords, ingestListeningEvents } from '../src/utils/normalizer.js';
 import { buildCelestialUniverse } from '../src/utils/universeBuilder.js';
+import { findArtistKnowledge, verifyExternalArtistIdentity } from '../src/utils/genreKnowledge/index.js';
 import type { RawTrackRecord, SpotifyStatusInfo, ListeningEvent, SpotifyPlaybackState } from '../src/types/index.js';
 
 describe('Spotify Error Classification & Diagnostics', () => {
@@ -1662,6 +1663,94 @@ describe('Section 16 — Local Genre Knowledge Engine Suite', () => {
     assert.equal(unknown.confidenceLevel, 'UNKNOWN');
     assert.equal(unknown.confidence, 0);
   });
+
+  test('6. Generic Artist Knowledge Registry data-driven resolution without ad-hoc branches', () => {
+    const damru = findArtistKnowledge('Damru');
+    assert.ok(damru);
+    assert.equal(damru.primaryCanonical, 'Psytrance');
+    assert.equal(damru.primarySubgenre, 'Ragatrance');
+    assert.equal(damru.confidence, 'HIGH');
+    assert.ok(damru.verifiedGenres.includes('ragatrance'));
+
+    const guineaPigs = findArtistKnowledge('guinea pigs');
+    assert.ok(guineaPigs);
+    assert.equal(guineaPigs.primaryCanonical, 'Psytrance');
+    assert.equal(guineaPigs.primarySubgenre, 'Dark Psytrance');
+    assert.equal(guineaPigs.collisionTarget, 'Country');
+
+    // Non-existent artist returns undefined
+    assert.equal(findArtistKnowledge('CompletelyUnknownProducer999'), undefined);
+  });
+
+  test('7. Identity Verifier: Exact, strong token match, ambiguous substring rejection, and track homonym defense', () => {
+    // Exact match
+    const exact = verifyExternalArtistIdentity('Damru', 'Damru');
+    assert.equal(exact.grade, 'EXACT');
+    assert.equal(exact.isVerified, true);
+    assert.equal(exact.confidenceDiscount, 0);
+
+    // Strong token match (e.g. prefix "The")
+    const strong = verifyExternalArtistIdentity('Chemical Brothers', 'The Chemical Brothers');
+    assert.equal(strong.grade, 'STRONG_MATCH');
+    assert.equal(strong.isVerified, true);
+
+    // Ambiguous substring match (e.g. Eve vs Steve) -> REJECTED (isVerified: false)
+    const ambig = verifyExternalArtistIdentity('Eve', 'Steve');
+    assert.equal(ambig.grade, 'AMBIGUOUS');
+    assert.equal(ambig.isVerified, false);
+
+    // Track-title homonym attack defense
+    // Returned track title matches query artist, but returned artist does NOT
+    const homonymAttack = verifyExternalArtistIdentity(
+      'Damru',
+      'Siddharth Mohan',
+      'Yaatra',
+      'Damru',
+      'Christian & Gospel'
+    );
+    assert.equal(homonymAttack.grade, 'MISMATCH');
+    assert.equal(homonymAttack.isVerified, false);
+    assert.match(homonymAttack.reason, /track-title homonym/i);
+  });
+
+  test('8. Guinea Pigs collision rejection against iTunes Country response', () => {
+    const collisionCheck = verifyExternalArtistIdentity(
+      'Guinea Pigs',
+      'Guinea Pigs',
+      undefined,
+      undefined,
+      'Country'
+    );
+    assert.equal(collisionCheck.grade, 'MISMATCH');
+    assert.equal(collisionCheck.isVerified, false);
+    assert.match(collisionCheck.reason, /catalog collision/i);
+  });
+
+  test('9. Mystery Basement Producer remains honestly Unknown across pipelines', async () => {
+    // Zero-signal input
+    const classified = classifyCanonicalGenre([], 'Mystery Basement Producer');
+    assert.equal(classified.canonicalGenre, 'Unknown');
+    assert.equal(classified.subgenre, 'Unknown');
+    assert.equal(classified.confidenceLevel, 'UNKNOWN');
+    assert.equal(classified.confidence, 0);
+
+    // Pipeline resolution
+    const resolved = await resolveArtistGenres([{ artistName: 'Mystery Basement Producer' }]);
+    assert.equal(resolved['Mystery Basement Producer'].canonicalGenre, 'Unknown');
+    assert.equal(resolved['Mystery Basement Producer'].subgenre, 'Unknown');
+  });
+
+  test('10. Input order invariance and whitespace tolerance in Knowledge Engine', () => {
+    const forward = classifyCanonicalGenre(['techno', 'minimal techno'], 'Artist X');
+    const backward = classifyCanonicalGenre(['minimal techno', 'techno'], 'Artist X');
+    assert.equal(forward.canonicalGenre, backward.canonicalGenre);
+    assert.equal(forward.subgenre, backward.subgenre);
+
+    const messyArtist = classifyCanonicalGenre([], '  dAmRu   ');
+    assert.equal(messyArtist.canonicalGenre, 'Psytrance');
+    assert.equal(messyArtist.subgenre, 'Ragatrance');
+  });
 });
+
 
 

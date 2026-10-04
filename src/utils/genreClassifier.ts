@@ -7,6 +7,7 @@
 
 import {
   resolveGenreWithKnowledge,
+  ARTIST_KNOWLEDGE_REGISTRY,
   type GenreConfidenceLevel,
   type GenreEvidenceItem,
 } from './genreKnowledge';
@@ -25,17 +26,21 @@ export interface GenreClassificationResult {
 }
 
 /**
- * Isolated, documented registry of verified streaming catalog collisions.
- * Used only when upstream streaming providers (e.g. Apple Music / Spotify) have
- * merged multiple distinct artists with identical names under a single catalog ID.
+ * Backward-compatible view of verified artist catalog collision defenses.
+ * Sourced authoritatively from the centralized ArtistKnowledgeRegistry.
  */
-export const CURATED_ARTIST_OVERRIDES: Record<string, { canonicalGenre: string; subgenre: string; reason: string }> = {
-  'guinea pigs': {
-    canonicalGenre: 'Psytrance',
-    subgenre: 'Dark Psytrance',
-    reason: 'Israeli psychedelic trance project (Avi & Shalom Sagges); iTunes artist entity #191215671 has catalog homonym conflation with obscure country artist',
-  },
-};
+export const CURATED_ARTIST_OVERRIDES: Record<string, { canonicalGenre: string; subgenre: string; reason: string }> = Object.fromEntries(
+  Object.entries(ARTIST_KNOWLEDGE_REGISTRY)
+    .filter(([, entry]) => Boolean(entry.collisionTarget))
+    .map(([key, entry]) => [
+      key,
+      {
+        canonicalGenre: entry.primaryCanonical,
+        subgenre: entry.primarySubgenre,
+        reason: entry.disambiguationNotes,
+      },
+    ])
+);
 
 /**
  * Canonical Genre definitions and matching rules.

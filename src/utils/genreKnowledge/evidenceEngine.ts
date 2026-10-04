@@ -5,9 +5,10 @@
  * deterministic candidate scoring, and first-class confidence derivation.
  */
 
+import { findArtistKnowledge, normalizeArtistKey } from './artistKnowledge';
+import { verifyExternalArtistIdentity } from './identityVerifier';
 import {
   CANONICAL_SPECIFICITY_WEIGHTS,
-  CATALOG_COLLISIONS,
   EVERY_NOISE_MICROGENRE_MAP,
   MORPHOLOGICAL_RULES,
 } from './ontologyData';
@@ -15,7 +16,14 @@ import {
 export type GenreConfidenceLevel = 'HIGH' | 'MEDIUM' | 'LOW' | 'UNKNOWN';
 
 export interface GenreEvidenceItem {
-  source: 'curated' | 'spotify_artist' | 'knowledge_ontology' | 'morphological' | 'fallback_song' | 'fallback_artist';
+  source:
+    | 'artist_knowledge'
+    | 'curated'
+    | 'spotify_artist'
+    | 'knowledge_ontology'
+    | 'morphological'
+    | 'fallback_song'
+    | 'fallback_artist';
   rawGenre: string;
   matchedCanonical: string;
   derivedSubgenre: string;
@@ -60,31 +68,20 @@ export function cleanGenreString(str: string): string {
  * with explainable deterministic scoring and confidence tracking.
  */
 export function evaluateGenreEvidence(input: EvidenceQueryInput): ResolvedGenreKnowledgeResult {
-  const normArtist = (input.artistName || '').trim().toLowerCase();
+  const normArtist = normalizeArtistKey(input.artistName || '');
   const evidenceList: GenreEvidenceItem[] = [];
 
-  // 1. Curated catalog collision check (e.g. Guinea Pigs iTunes homonym conflation)
-  if (normArtist && CATALOG_COLLISIONS[normArtist]) {
-    const override = CATALOG_COLLISIONS[normArtist];
-    const curatedItem: GenreEvidenceItem = {
-      source: 'curated',
-      rawGenre: normArtist,
-      matchedCanonical: override.canonical,
-      derivedSubgenre: override.subgenre,
-      weight: 120,
-      notes: override.reason,
-    };
-    return {
-      canonicalGenre: override.canonical,
-      subgenre: override.subgenre,
-      confidence: 'HIGH',
-      confidenceScore: 1.0,
-      source: 'curated',
-      evidence: [curatedItem],
-      candidates: [override.canonical],
-      selectionReason: `Curated registry override: ${override.reason}`,
-      conflictDetected: false,
-    };
+  // 1. Consult Structured Artist Knowledge Registry (Generic, data-driven identity & collision defense)
+  const artistKnowledge = findArtistKnowledge(normArtist);
+  if (artistKnowledge) {
+    evidenceList.push({
+      source: 'artist_knowledge',
+      rawGenre: artistKnowledge.verifiedGenres[0] || artistKnowledge.primarySubgenre.toLowerCase(),
+      matchedCanonical: artistKnowledge.primaryCanonical,
+      derivedSubgenre: artistKnowledge.primarySubgenre,
+      weight: 120, // Authoritative verified signal
+      notes: `${artistKnowledge.provenance}: ${artistKnowledge.disambiguationNotes}`,
+    });
   }
 
   // 2. Collate Spotify runtime genre evidence
@@ -152,7 +149,7 @@ export function evaluateGenreEvidence(input: EvidenceQueryInput): ResolvedGenreK
     }
   }
 
-  // 3. Collate external provider fallback evidence (with artist-name verification)
+  // 3. Collate external provider fallback evidence (with rigorous identity & homonym verification)
   const rawFallbackGenres: string[] = [];
   if (Array.isArray(input.fallbackGenres)) {
     rawFallbackGenres.push(...input.fallbackGenres);
@@ -160,20 +157,27 @@ export function evaluateGenreEvidence(input: EvidenceQueryInput): ResolvedGenreK
     rawFallbackGenres.push(input.fallbackGenres);
   }
 
-  // Verify that external result actually matches artist name rather than song title homonym
-  let fallbackNameVerified = true;
-  if (input.fallbackArtistName && normArtist) {
-    const normFallbackArtist = input.fallbackArtistName.trim().toLowerCase();
-    fallbackNameVerified =
-      normFallbackArtist.includes(normArtist) || normArtist.includes(normFallbackArtist);
-  }
-
   for (const raw of rawFallbackGenres) {
     const clean = raw.trim().toLowerCase();
     if (!clean || clean === 'unknown') continue;
 
-    // If external fallback returned an unverified artist match (e.g. song title match), heavily penalize
-    const weightDiscount = fallbackNameVerified ? 0 : 50;
+    // Strict generic identity verification
+    const verification = input.fallbackArtistName
+      ? verifyExternalArtistIdentity(
+          input.artistName,
+          input.fallbackArtistName,
+          input.trackTitle,
+          undefined,
+          raw
+        )
+      : { grade: 'EXACT', isVerified: true, confidenceDiscount: 0, reason: 'No fallback artist name supplied' };
+
+    // If completely mismatched or identified as track-title homonym / collision, reject immediately
+    if (!verification.isVerified && verification.confidenceDiscount >= 100) {
+      continue;
+    }
+
+    const weightDiscount = verification.confidenceDiscount;
 
     if (EVERY_NOISE_MICROGENRE_MAP[clean]) {
       const [canonical, subgenre] = EVERY_NOISE_MICROGENRE_MAP[clean];
@@ -187,9 +191,7 @@ export function evaluateGenreEvidence(input: EvidenceQueryInput): ResolvedGenreK
         matchedCanonical: canonical,
         derivedSubgenre: subgenre,
         weight,
-        notes: fallbackNameVerified
-          ? `External provider match for "${clean}"`
-          : `External provider name mismatch ("${input.fallbackArtistName}" vs "${input.artistName}")`,
+        notes: `External provider match for "${clean}": ${verification.reason}`,
       });
       continue;
     }
@@ -207,27 +209,14 @@ export function evaluateGenreEvidence(input: EvidenceQueryInput): ResolvedGenreK
           matchedCanonical: rule.canonical,
           derivedSubgenre: subgenre,
           weight,
-          notes: `External fallback morphological match for "${clean}"`,
+          notes: `External fallback morphological match for "${clean}": ${verification.reason}`,
         });
         break;
       }
     }
   }
 
-  // 4. Special Knowledge Check for Unlisted Artists (e.g., Damru)
-  // If artist name itself is associated with known subgenres in music ontology
-  if (normArtist === 'damru') {
-    evidenceList.push({
-      source: 'knowledge_ontology',
-      rawGenre: 'ragatrance',
-      matchedCanonical: 'Psytrance',
-      derivedSubgenre: 'Ragatrance',
-      weight: 100,
-      notes: 'Music ontology index: Damru is established originator of Ragatrance (Hindustani Classical + Psytrance)',
-    });
-  }
-
-  // 5. If zero evidence collected, return honest Unknown
+  // 4. If zero evidence collected, return honest Unknown
   if (evidenceList.length === 0) {
     return {
       canonicalGenre: 'Unknown',
@@ -242,7 +231,7 @@ export function evaluateGenreEvidence(input: EvidenceQueryInput): ResolvedGenreK
     };
   }
 
-  // 6. Deterministic Candidate Scoring
+  // 5. Deterministic Candidate Scoring
   interface ScoredCandidate {
     canonical: string;
     subgenre: string;
@@ -272,14 +261,14 @@ export function evaluateGenreEvidence(input: EvidenceQueryInput): ResolvedGenreK
       existing.evidenceCount++;
       existing.sources.add(item.source);
 
-      // Prefer a specific subgenre (e.g. "UK Bass", "Hi-Tech", "Trap") over exact repetition of the canonical name (e.g. "Breakbeat", "Psytrance", "Hip Hop")
+      // Prefer specific subgenre over generic repetition
       const isCurrentGeneric = existing.bestSubgenre.toLowerCase() === existing.canonical.toLowerCase();
       const isNewSpecific = item.derivedSubgenre.toLowerCase() !== item.matchedCanonical.toLowerCase();
 
       if (isCurrentGeneric && isNewSpecific) {
         existing.bestSubgenre = item.derivedSubgenre;
       } else if (!isCurrentGeneric && !isNewSpecific) {
-        // Retain existing specific subgenre even if a generic canonical tag arrived later
+        // Retain existing specific subgenre
       } else if (item.weight > existing.highestWeight) {
         existing.highestWeight = item.weight;
         existing.bestSubgenre = item.derivedSubgenre;
@@ -287,7 +276,7 @@ export function evaluateGenreEvidence(input: EvidenceQueryInput): ResolvedGenreK
     }
   }
 
-  // Check for cross-signal convergence bonus (e.g. multiple distinct sources agree)
+  // Multi-source convergence bonus
   for (const candidate of candidateMap.values()) {
     if (candidate.sources.size > 1) {
       candidate.totalScore += 25; // Bonus for independent multi-source agreement
@@ -315,11 +304,12 @@ export function evaluateGenreEvidence(input: EvidenceQueryInput): ResolvedGenreK
     conflictResolution = `Resolved conflict between ${winner.canonical} (${winner.totalScore.toFixed(0)}) and ${second.canonical} (${second.totalScore.toFixed(0)}) via specificity weighting and source convergence.`;
   }
 
-  // 7. Confidence Level Derivation
+  // 6. Confidence Level Derivation
   let confidence: GenreConfidenceLevel = 'UNKNOWN';
   if (
     winner.totalScore >= 100 ||
     (winner.sources.size > 1 && winner.totalScore >= 85) ||
+    winner.sources.has('artist_knowledge') ||
     winner.sources.has('curated')
   ) {
     confidence = 'HIGH';
@@ -334,15 +324,17 @@ export function evaluateGenreEvidence(input: EvidenceQueryInput): ResolvedGenreK
   const confidenceScore = Math.min(1.0, Number((winner.totalScore / 130).toFixed(2)));
   const uniqueCandidateNames = sortedCandidates.map((c) => c.canonical);
 
-  const primarySource = winner.sources.has('curated')
-    ? 'curated'
-    : winner.sources.has('knowledge_ontology')
-      ? 'knowledge_engine'
-      : winner.sources.has('spotify_artist')
-        ? 'spotify'
-        : winner.sources.has('fallback_song')
-          ? 'fallback_song'
-          : 'fallback_artist';
+  const primarySource = winner.sources.has('artist_knowledge')
+    ? 'knowledge_engine'
+    : winner.sources.has('curated')
+      ? 'curated'
+      : winner.sources.has('knowledge_ontology')
+        ? 'knowledge_engine'
+        : winner.sources.has('spotify_artist')
+          ? 'spotify'
+          : winner.sources.has('fallback_song')
+            ? 'fallback_song'
+            : 'fallback_artist';
 
   return {
     canonicalGenre: winner.canonical,

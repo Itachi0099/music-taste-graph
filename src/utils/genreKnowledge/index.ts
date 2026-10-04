@@ -8,6 +8,8 @@
  * is trained on Spotify data.
  */
 
+export * from './artistKnowledge';
+export * from './identityVerifier';
 export * from './ontologyData';
 export * from './evidenceEngine';
 
