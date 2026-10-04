@@ -17,8 +17,13 @@ import {
   getSpotifyRateLimitRemainingMs,
   getLast429Metadata,
   spotifyFetch,
+  classifyCanonicalGenre,
+  resolveArtistGenres,
+  CURATED_ARTIST_OVERRIDES,
+  getInMemoryArtistGenreCache,
 } from '../src/utils/spotify.js';
 import { normalizeMusicRecords, ingestListeningEvents } from '../src/utils/normalizer.js';
+import { buildCelestialUniverse } from '../src/utils/universeBuilder.js';
 import type { RawTrackRecord, SpotifyStatusInfo, ListeningEvent, SpotifyPlaybackState } from '../src/types/index.js';
 
 describe('Spotify Error Classification & Diagnostics', () => {
@@ -1181,7 +1186,7 @@ describe('Phase 18 Exhaustive 24-Scenario Spotify Audit Tests', () => {
 
     const recentEvents = await fetchRecentlyPlayedEvents('token');
     assert.equal(recentEvents.length, 1);
-    assert.equal(recentEvents[0].genre, 'ambient', 'Reused genre from session cache without external query');
+    assert.equal(recentEvents[0].genre, 'Ambient', 'Reused genre from session cache without external query');
   });
 
   test('22. Multi-tab isolation and rate-limit cooldown coordination', async () => {
@@ -1267,3 +1272,302 @@ describe('Phase 18 Exhaustive 24-Scenario Spotify Audit Tests', () => {
     assert.equal(deniedHarness.spotifyStatus.lastSyncAt, null);
   });
 });
+
+describe('Section 15 — Artist Genre Accuracy & Canonical Taxonomy Suite', () => {
+  const origFetch = globalThis.fetch;
+
+  beforeEach(() => {
+    resetSpotifyRateLimitState();
+  });
+
+  afterEach(() => {
+    resetSpotifyRateLimitState();
+    globalThis.fetch = origFetch;
+  });
+
+  test('1. Guinea Pigs resolves to Psytrance (never Country)', async () => {
+    // A) Direct classification with catalog conflation mitigation
+    const result = classifyCanonicalGenre([], 'Guinea Pigs', 'How to Get By in the U.S.A.');
+    assert.equal(result.canonicalGenre, 'Psytrance');
+    assert.equal(result.subgenre, 'Dark Psytrance');
+    assert.notEqual(result.canonicalGenre, 'Country');
+
+    // B) Through resolveArtistGenres pipeline
+    const resolved = await resolveArtistGenres([{ artistName: 'Guinea Pigs', trackTitle: 'Zonk' }]);
+    assert.ok(resolved['Guinea Pigs']);
+    assert.equal(resolved['Guinea Pigs'].canonicalGenre, 'Psytrance');
+    assert.notEqual(resolved['Guinea Pigs'].canonicalGenre, 'Country');
+
+    // Verify documented curated override
+    assert.ok(CURATED_ARTIST_OVERRIDES['guinea pigs']);
+    assert.equal(CURATED_ARTIST_OVERRIDES['guinea pigs'].canonicalGenre, 'Psytrance');
+  });
+
+  test('2. Known psytrance artists resolve to Psytrance', () => {
+    const astrix = classifyCanonicalGenre(['psytrance', 'goa trance', 'full-on psy'], 'Astrix');
+    assert.equal(astrix.canonicalGenre, 'Psytrance');
+    assert.ok(astrix.subgenre.includes('Trance'));
+
+    const goa = classifyCanonicalGenre(['goa trance'], 'Goa Project');
+    assert.equal(goa.canonicalGenre, 'Psytrance');
+    assert.equal(goa.subgenre, 'Goa Trance');
+
+    const hitech = classifyCanonicalGenre(['hi-tech'], 'Kindzadza');
+    assert.equal(hitech.canonicalGenre, 'Psytrance');
+    assert.equal(hitech.subgenre, 'Hi-Tech');
+
+    const darkpsy = classifyCanonicalGenre(['darkpsy', 'psycore'], 'Kashyyyk');
+    assert.equal(darkpsy.canonicalGenre, 'Psytrance');
+    assert.equal(darkpsy.subgenre, 'Darkpsy');
+  });
+
+  test('3. R&B/Soul maps to R&B and beats generic Pop', () => {
+    // Spotify often tags R&B artists with both 'pop' and 'contemporary r&b'
+    const sza = classifyCanonicalGenre(['pop', 'contemporary r&b', 'urban contemporary'], 'SZA');
+    assert.equal(sza.canonicalGenre, 'R&B');
+    assert.equal(sza.subgenre, 'Contemporary R&B');
+
+    const frankOcean = classifyCanonicalGenre(['neo soul', 'r&b', 'pop'], 'Frank Ocean');
+    assert.equal(frankOcean.canonicalGenre, 'R&B');
+  });
+
+  test('4. Alternative R&B maps to R&B', () => {
+    const theWeeknd = classifyCanonicalGenre(['alternative r&b', 'pop', 'canadian contemporary r&b'], 'The Weeknd');
+    assert.equal(theWeeknd.canonicalGenre, 'R&B');
+    assert.equal(theWeeknd.subgenre, 'Alternative R&B');
+  });
+
+  test('5. Hip-hop does not become R&B', () => {
+    const kendrick = classifyCanonicalGenre(['conscious hip hop', 'hip hop', 'rap', 'west coast rap'], 'Kendrick Lamar');
+    assert.equal(kendrick.canonicalGenre, 'Hip Hop');
+    assert.notEqual(kendrick.canonicalGenre, 'R&B');
+
+    const travis = classifyCanonicalGenre(['trap', 'hip hop', 'rap'], 'Travis Scott');
+    assert.equal(travis.canonicalGenre, 'Hip Hop');
+    assert.notEqual(travis.canonicalGenre, 'R&B');
+
+    const trapArtist = classifyCanonicalGenre(['trap'], 'Gucci Mane');
+    assert.equal(trapArtist.canonicalGenre, 'Hip Hop');
+    assert.equal(trapArtist.subgenre, 'Trap');
+  });
+
+  test('6. Country remains Country only when source data actually indicates Country', () => {
+    const cash = classifyCanonicalGenre(['classic country', 'outlaw country', 'country'], 'Johnny Cash');
+    assert.equal(cash.canonicalGenre, 'Country');
+
+    // Negative check: Psytrance / Electronic / Pop / Unknown NEVER become Country
+    const electronic = classifyCanonicalGenre(['electronic', 'synth'], 'Unknown Synth');
+    assert.notEqual(electronic.canonicalGenre, 'Country');
+
+    const empty = classifyCanonicalGenre([], 'Empty Artist');
+    assert.notEqual(empty.canonicalGenre, 'Country');
+  });
+
+  test('7. Empty Spotify genres fall back to song-level lookup correctly', async () => {
+    globalThis.fetch = async (url: RequestInfo | URL) => {
+      const u = String(url);
+      if (u.includes('entity=song')) {
+        return new Response(JSON.stringify({
+          results: [{ primaryGenreName: 'Trance', trackName: 'Elysium' }],
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      return new Response(JSON.stringify({ results: [] }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    };
+
+    const resolved = await resolveArtistGenres([{ artistName: 'Cosmic Gate', trackTitle: 'Elysium' }]);
+    assert.equal(resolved['Cosmic Gate'].canonicalGenre, 'Trance');
+  });
+
+  test('8. Spotify genres not overwritten by weaker fallback', async () => {
+    let externalFallbackHit = false;
+    globalThis.fetch = async (url: RequestInfo | URL) => {
+      const u = String(url);
+      if (u.includes('itunes.apple.com')) {
+        externalFallbackHit = true;
+      }
+      return new Response('', { status: 200 });
+    };
+
+    const initialMap = {
+      'SZA': { canonicalGenre: 'R&B', subgenre: 'Contemporary R&B' },
+    };
+
+    const result = await resolveArtistGenres(['SZA'], initialMap);
+    assert.equal(result['SZA'].canonicalGenre, 'R&B');
+    assert.equal(externalFallbackHit, false, 'External fallback should not be queried when genre is already known');
+  });
+
+  test('9. Unknown artists remain Unknown (never defaulted to Pop, Electronic, or Country)', async () => {
+    globalThis.fetch = async () => new Response(JSON.stringify({ results: [] }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    });
+
+    const resolved = await resolveArtistGenres([{ artistName: 'Super Rare Unlisted Producer' }]);
+    assert.equal(resolved['Super Rare Unlisted Producer'].canonicalGenre, 'Unknown');
+    assert.notEqual(resolved['Super Rare Unlisted Producer'].canonicalGenre, 'Country');
+    assert.notEqual(resolved['Super Rare Unlisted Producer'].canonicalGenre, 'Electronic');
+    assert.notEqual(resolved['Super Rare Unlisted Producer'].canonicalGenre, 'Pop');
+  });
+
+  test('10. Unknown is not permanently cached', async () => {
+    globalThis.fetch = async () => new Response(JSON.stringify({ results: [] }), { status: 200 });
+
+    await resolveArtistGenres([{ artistName: 'Ghost Artist' }]);
+    const cache = getInMemoryArtistGenreCache();
+    assert.equal(cache.has('ghost artist'), false, 'Unknown genre MUST NOT be stored in session cache');
+  });
+
+  test('11. Resolution is deterministic regardless of source array ordering', () => {
+    const order1 = classifyCanonicalGenre(['pop', 'contemporary r&b', 'dance pop'], 'Test Artist');
+    const order2 = classifyCanonicalGenre(['dance pop', 'contemporary r&b', 'pop'], 'Test Artist');
+    const order3 = classifyCanonicalGenre(['contemporary r&b', 'pop', 'dance pop'], 'Test Artist');
+
+    assert.equal(order1.canonicalGenre, 'R&B');
+    assert.equal(order2.canonicalGenre, 'R&B');
+    assert.equal(order3.canonicalGenre, 'R&B');
+    assert.equal(order1.confidence, order2.confidence);
+    assert.equal(order2.confidence, order3.confidence);
+  });
+
+  test('12. Existing genre mappings continue to work', () => {
+    assert.equal(classifyCanonicalGenre(['acid techno', 'techno'], 'DJ').canonicalGenre, 'Techno');
+    assert.equal(classifyCanonicalGenre(['french house', 'disco house'], 'DJ').canonicalGenre, 'French House');
+    assert.equal(classifyCanonicalGenre(['breakbeat', 'breaks'], 'DJ').canonicalGenre, 'Breakbeat');
+    assert.equal(classifyCanonicalGenre(['ambient', 'drone'], 'DJ').canonicalGenre, 'Ambient');
+    assert.equal(classifyCanonicalGenre(['idm', 'braindance'], 'DJ').canonicalGenre, 'IDM');
+    assert.equal(classifyCanonicalGenre(['heavy metal', 'death metal'], 'Band').canonicalGenre, 'Metal');
+    assert.equal(classifyCanonicalGenre(['classical', 'orchestral'], 'Orchestra').canonicalGenre, 'Classical');
+  });
+
+  test('13. Multi-user data isolation remains intact with canonical genres', () => {
+    const userARecords: RawTrackRecord[] = [
+      { id: 't1', track: 'Kill Bill', artist: 'SZA', genre: 'R&B', subgenre: 'Contemporary R&B' },
+      { id: 't2', track: 'Zonk', artist: 'Guinea Pigs', genre: 'Psytrance', subgenre: 'Dark Psytrance' },
+    ];
+    const dbUserA = normalizeMusicRecords(userARecords, 'spotify');
+    assert.equal(dbUserA.genres.has('genre-r-b') || dbUserA.genres.has('genre-r&b'), true);
+    assert.equal(dbUserA.genres.has('genre-psytrance'), true);
+    assert.equal(dbUserA.genres.has('genre-country'), false);
+
+    // Empty User B
+    const dbUserB = normalizeMusicRecords([], 'spotify');
+    assert.equal(dbUserB.rawRecords.length, 0);
+    assert.equal(dbUserB.genres.size, 0);
+    assert.equal(dbUserB.artists.size, 0);
+  });
+
+  test('14. Rate-limit cooldown behavior remains intact', async () => {
+    globalThis.fetch = async () =>
+      new Response(JSON.stringify({ error: { message: 'Too Many Requests' } }), {
+        status: 429,
+        headers: { 'Retry-After': '15', 'Content-Type': 'application/json' },
+      });
+
+    try {
+      await fetchSpotifyTopTracks('rate-limited-token', true);
+    } catch {
+      // Expected
+    }
+
+    assert.equal(isSpotifyRateLimited(), true);
+    assert.ok(getSpotifyRateLimitRemainingMs() > 0);
+
+    // Any subsequent call is blocked locally
+    let upstreamReached = false;
+    globalThis.fetch = async () => {
+      upstreamReached = true;
+      return new Response('', { status: 200 });
+    };
+
+    const res = await spotifyFetch('/v1/me/top/tracks', 'token');
+    assert.equal(res.status, 429);
+    assert.equal(upstreamReached, false);
+  });
+
+  test('15. Universe rendering data structures remain valid with Psytrance and R&B systems', () => {
+    const sampleTracks: RawTrackRecord[] = [
+      { id: '1', track: 'Zonk', artist: 'Guinea Pigs', genre: 'Psytrance', subgenre: 'Dark Psytrance' },
+      { id: '2', track: 'Kill Bill', artist: 'SZA', genre: 'R&B', subgenre: 'Contemporary R&B' },
+      { id: '3', track: 'Solar Drift', artist: 'Astral Project', genre: 'Ambient', subgenre: 'Ambient' },
+      { id: '4', track: 'Unknown Beat', artist: 'Mystery Artist', genre: 'Unknown', subgenre: 'Unknown' },
+    ];
+
+    const universe = buildCelestialUniverse(sampleTracks, true);
+    assert.ok(universe);
+    assert.equal(universe.genres.length >= 3, true);
+
+    const psytranceSystem = universe.genres.find((g) => g.name === 'Psytrance');
+    assert.ok(psytranceSystem, 'Psytrance stellar system must exist in universe');
+    assert.equal(psytranceSystem.color, '#BA68C8');
+    assert.ok(psytranceSystem.x !== undefined && psytranceSystem.y !== undefined);
+    assert.ok(psytranceSystem.radius > 0);
+
+    const rnbSystem = universe.genres.find((g) => g.name === 'R&B');
+    assert.ok(rnbSystem, 'R&B stellar system must exist in universe');
+    assert.equal(rnbSystem.color, '#D96560');
+
+    // Verify artists and subgenres
+    const guineaPigsArtist = universe.artists.find((a) => a.name === 'Guinea Pigs');
+    assert.ok(guineaPigsArtist, 'Guinea Pigs artist must exist');
+    assert.equal(guineaPigsArtist.primaryGenre, 'Psytrance');
+
+    // Country system must NOT exist for this dataset
+    const countrySystem = universe.genres.find((g) => g.name === 'Country');
+    assert.equal(countrySystem, undefined, 'Country system must not be generated when no Country tracks exist');
+  });
+
+  test('16. Adversarial multi-genre precedence & input-ordering invariance', () => {
+    // Trance vs Goa Trance (Score tie: 80+15=95 vs 95, base weight tie-breaker ensures Psytrance wins)
+    assert.equal(classifyCanonicalGenre(['trance', 'goa trance']).canonicalGenre, 'Psytrance');
+    assert.equal(classifyCanonicalGenre(['goa trance', 'trance']).canonicalGenre, 'Psytrance');
+
+    // Pop vs Alternative R&B
+    assert.equal(classifyCanonicalGenre(['pop', 'alternative r&b']).canonicalGenre, 'R&B');
+    assert.equal(classifyCanonicalGenre(['alternative r&b', 'pop']).canonicalGenre, 'R&B');
+
+    // Dance Pop vs Contemporary R&B
+    assert.equal(classifyCanonicalGenre(['dance pop', 'contemporary r&b']).canonicalGenre, 'R&B');
+    assert.equal(classifyCanonicalGenre(['contemporary r&b', 'dance pop']).canonicalGenre, 'R&B');
+
+    // Techno vs Electronic
+    assert.equal(classifyCanonicalGenre(['techno', 'electronic']).canonicalGenre, 'Techno');
+    assert.equal(classifyCanonicalGenre(['electronic', 'techno']).canonicalGenre, 'Techno');
+
+    // Progressive House vs House
+    assert.equal(classifyCanonicalGenre(['progressive house', 'house']).canonicalGenre, 'Progressive House');
+    assert.equal(classifyCanonicalGenre(['house', 'progressive house']).canonicalGenre, 'Progressive House');
+
+    // Metal vs Rock
+    assert.equal(classifyCanonicalGenre(['metal', 'rock']).canonicalGenre, 'Metal');
+    assert.equal(classifyCanonicalGenre(['rock', 'metal']).canonicalGenre, 'Metal');
+
+    // Country vs Pop
+    assert.equal(classifyCanonicalGenre(['country', 'pop']).canonicalGenre, 'Country');
+    assert.equal(classifyCanonicalGenre(['pop', 'country']).canonicalGenre, 'Country');
+
+    // Americana vs Country
+    assert.equal(classifyCanonicalGenre(['americana', 'country']).canonicalGenre, 'Country');
+    assert.equal(classifyCanonicalGenre(['country', 'americana']).canonicalGenre, 'Country');
+
+    // Country vs Electronic
+    assert.equal(classifyCanonicalGenre(['country', 'electronic']).canonicalGenre, 'Country');
+    assert.equal(classifyCanonicalGenre(['electronic', 'country']).canonicalGenre, 'Country');
+
+    // Equal score & base weight tie (Breakbeat vs Trip Hop: both 85+15=100) -> Tertiary tie-breaker is deterministic
+    const tie1 = classifyCanonicalGenre(['trip hop', 'breakbeat']);
+    const tie2 = classifyCanonicalGenre(['breakbeat', 'trip hop']);
+    assert.equal(tie1.canonicalGenre, tie2.canonicalGenre, 'Equal-score ties must resolve to identical canonical genre');
+    assert.equal(tie1.canonicalGenre, 'Breakbeat');
+  });
+
+  test('17. Electronic semantic role: pure umbrella input preserves Electronic', () => {
+    const pureElectronic = classifyCanonicalGenre(['electronic']);
+    assert.equal(pureElectronic.canonicalGenre, 'Electronic');
+    assert.equal(pureElectronic.subgenre, 'Electronic');
+
+    const edm = classifyCanonicalGenre(['edm', 'dance']);
+    assert.equal(edm.canonicalGenre, 'Electronic');
+  });
+});
+

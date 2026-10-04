@@ -202,6 +202,96 @@ export const GENRE_CELESTIAL_COLORS: Record<string, CelestialColorIdentity> = {
     dustRgb: '110, 40, 38',
     temperature: 'warm',
   },
+  // Rock: Crimson / Iron Stone
+  'Rock': {
+    primary: '#CF5A5A',
+    secondary: '#7D2929',
+    glowRgb: '200, 85, 85',
+    coreRgb: '255, 242, 242',
+    dustRgb: '100, 35, 35',
+    temperature: 'warm',
+  },
+  // Metal: Dark Silver / Obsidian Slate
+  'Metal': {
+    primary: '#9E9EA8',
+    secondary: '#575761',
+    glowRgb: '150, 150, 160',
+    coreRgb: '245, 245, 250',
+    dustRgb: '65, 65, 75',
+    temperature: 'cool',
+  },
+  // Pop: Radiant Rose / Vibrant Pink
+  'Pop': {
+    primary: '#E868A2',
+    secondary: '#962B62',
+    glowRgb: '230, 95, 155',
+    coreRgb: '255, 242, 248',
+    dustRgb: '115, 35, 75',
+    temperature: 'hyper',
+  },
+  // Classical: Solar Ivory / Warm Pearl
+  'Classical': {
+    primary: '#E6DEC8',
+    secondary: '#91866B',
+    glowRgb: '220, 210, 190',
+    coreRgb: '255, 253, 248',
+    dustRgb: '110, 100, 80',
+    temperature: 'neutral',
+  },
+  // Country: Warm Leather / Sunlit Copper
+  'Country': {
+    primary: '#C68B59',
+    secondary: '#7A4D27',
+    glowRgb: '190, 130, 75',
+    coreRgb: '255, 248, 240',
+    dustRgb: '95, 60, 28',
+    temperature: 'warm',
+  },
+  // Folk: Woodland Olive / Forest Amber
+  'Folk': {
+    primary: '#8EA85F',
+    secondary: '#4D612B',
+    glowRgb: '135, 160, 85',
+    coreRgb: '248, 255, 240',
+    dustRgb: '65, 80, 35',
+    temperature: 'neutral',
+  },
+  // Reggae: Sunlit Emerald / Gold
+  'Reggae': {
+    primary: '#5CB874',
+    secondary: '#286B3B',
+    glowRgb: '85, 175, 110',
+    coreRgb: '238, 255, 242',
+    dustRgb: '35, 85, 45',
+    temperature: 'warm',
+  },
+  // Latin: Vibrant Sunset Amber
+  'Latin': {
+    primary: '#E08443',
+    secondary: '#8F4818',
+    glowRgb: '220, 125, 60',
+    coreRgb: '255, 245, 235',
+    dustRgb: '110, 55, 20',
+    temperature: 'warm',
+  },
+  // Blues: Deep Cobalt / Indigo
+  'Blues': {
+    primary: '#4E7BC7',
+    secondary: '#254580',
+    glowRgb: '70, 115, 195',
+    coreRgb: '238, 245, 255',
+    dustRgb: '30, 55, 100',
+    temperature: 'cool',
+  },
+  // Unknown: Nebular Slate / Muted Dust
+  'Unknown': {
+    primary: '#7D8597',
+    secondary: '#404552',
+    glowRgb: '115, 122, 140',
+    coreRgb: '240, 242, 246',
+    dustRgb: '50, 54, 62',
+    temperature: 'neutral',
+  },
 };
 
 // Fallback dynamic celestial color for arbitrary or unknown genres

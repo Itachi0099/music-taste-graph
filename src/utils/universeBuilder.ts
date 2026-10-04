@@ -35,8 +35,18 @@ const GENRE_AFFINITIES: Record<string, string[]> = {
   'Ambient': ['IDM', 'Trip Hop', 'Jazz', 'Electronic'],
   'IDM': ['Ambient', 'Breakbeat', 'Electronic', 'Techno'],
   'French House': ['House', 'Nu Disco', 'Synth-pop'],
-  'R&B': ['Hip Hop', 'Synth-pop', 'Trip Hop'],
-  'Electronic': ['Techno', 'Ambient', 'IDM', 'Breakbeat'],
+  'R&B': ['Hip Hop', 'Synth-pop', 'Trip Hop', 'Pop', 'Soul'],
+  'Electronic': ['Techno', 'Ambient', 'IDM', 'Breakbeat', 'Trance', 'Psytrance'],
+  'Psytrance': ['Trance', 'Techno', 'Breakbeat', 'Electronic', 'Ambient'],
+  'Rock': ['Alternative Rock', 'Indie Rock', 'Post-Punk Revival', 'Metal', 'Blues'],
+  'Metal': ['Rock', 'Alternative Rock', 'Post-Punk Revival'],
+  'Pop': ['Indie Pop', 'Synth-pop', 'Nu Disco', 'R&B', 'Dance'],
+  'Country': ['Folk', 'Blues', 'Rock', 'Americana'],
+  'Folk': ['Country', 'Indie Rock', 'Americana', 'Rock'],
+  'Classical': ['Ambient', 'IDM', 'Modern Classical'],
+  'Reggae': ['Trip Hop', 'Hip Hop', 'Dub'],
+  'Latin': ['Pop', 'Hip Hop', 'R&B'],
+  'Blues': ['Jazz', 'Rock', 'R&B', 'Country'],
 };
 
 /**

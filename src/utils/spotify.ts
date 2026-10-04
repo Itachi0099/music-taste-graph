@@ -9,8 +9,18 @@ import type {
   SpotifyUserProfile,
 } from '../types/spotify';
 import { SpotifyApiError, logSpotifySyncDiagnostic, sanitizeEndpoint } from './spotifyError';
+import {
+  classifyCanonicalGenre,
+  diagnoseArtistGenre,
+} from './genreClassifier';
 
 export { SpotifyApiError, classifySpotifyStatus, getSpotifyStatusLabel, logSpotifySyncDiagnostic } from './spotifyError';
+export {
+  classifyCanonicalGenre,
+  diagnoseArtistGenre,
+  CURATED_ARTIST_OVERRIDES,
+  cleanGenreString,
+} from './genreClassifier';
 
 const DEFAULT_CLIENT_ID = '663e5f2a2950473ba037426e5343b8df';
 const CLIENT_ID = import.meta.env?.VITE_SPOTIFY_CLIENT_ID || DEFAULT_CLIENT_ID;
@@ -470,39 +480,82 @@ export async function spotifyFetch(url: string, token: string, timeoutMs = 8000)
   return res;
 }
 
+export interface ResolvedGenreInfo {
+  canonicalGenre: string;
+  subgenre: string;
+}
+
+export type ArtistGenreQuery = string | { artistName: string; trackTitle?: string };
+
 // In-memory artist genre cache for the current browser session (normalized lowercase key -> legitimate genre)
 // NEVER caches 'Unknown', empty strings, or temporary network failures.
-const inMemoryArtistGenreCache = new Map<string, string>();
+const inMemoryArtistGenreCache = new Map<string, ResolvedGenreInfo>();
+
+export const getInMemoryArtistGenreCache = () => inMemoryArtistGenreCache;
 
 /**
  * Resolves artist genres via open iTunes directory fallback if Spotify returns empty genres
  */
-async function resolveArtistGenres(artistNames: string[], knownGenreMap: Record<string, string>): Promise<Record<string, string>> {
-  // 1. Seed session cache from any legitimate genres already present in knownGenreMap
-  for (const [artist, genre] of Object.entries(knownGenreMap)) {
-    if (genre && genre !== 'Unknown') {
-      inMemoryArtistGenreCache.set(artist.trim().toLowerCase(), genre);
+export async function resolveArtistGenres(
+  artists: ArtistGenreQuery[],
+  knownGenreMap: Record<string, ResolvedGenreInfo> = {}
+): Promise<Record<string, ResolvedGenreInfo>> {
+  // 1. Normalize query items
+  const queryItems: Array<{ artistName: string; trackTitle?: string }> = artists
+    .map((item) => {
+      if (typeof item === 'string') {
+        return { artistName: item.trim(), trackTitle: undefined };
+      }
+      return { artistName: item.artistName.trim(), trackTitle: item.trackTitle?.trim() };
+    })
+    .filter((q) => q.artistName.length > 0);
+
+  // 2. Seed session cache from any legitimate genres already present in knownGenreMap
+  for (const [artist, info] of Object.entries(knownGenreMap)) {
+    if (info && info.canonicalGenre && info.canonicalGenre !== 'Unknown') {
+      inMemoryArtistGenreCache.set(artist.trim().toLowerCase(), info);
     }
   }
 
-  // 2. Resolve known artists from in-memory session cache first (case-insensitive)
-  for (const artistName of artistNames) {
-    const key = artistName.trim().toLowerCase();
-    if (!knownGenreMap[artistName] && inMemoryArtistGenreCache.has(key)) {
-      knownGenreMap[artistName] = inMemoryArtistGenreCache.get(key)!;
-    }
-  }
+  // 3. Resolve known artists from in-memory session cache or curated overrides first
+  const missing: Array<{ artistName: string; trackTitle?: string }> = [];
 
-  // 3. Only query external fallback provider for artists not yet resolved with a legitimate genre
-  const missing = artistNames.filter((name) => {
-    if (knownGenreMap[name] && knownGenreMap[name] !== 'Unknown') return false;
-    const key = name.trim().toLowerCase();
+  for (const item of queryItems) {
+    const key = item.artistName.toLowerCase();
+
+    if (knownGenreMap[item.artistName] && knownGenreMap[item.artistName].canonicalGenre !== 'Unknown') {
+      continue;
+    }
+
     if (inMemoryArtistGenreCache.has(key)) {
-      knownGenreMap[name] = inMemoryArtistGenreCache.get(key)!;
-      return false;
+      const cached = inMemoryArtistGenreCache.get(key)!;
+      knownGenreMap[item.artistName] = cached;
+      diagnoseArtistGenre(item.artistName, [], [], {
+        canonicalGenre: cached.canonicalGenre,
+        subgenre: cached.subgenre,
+        confidence: 1.0,
+        source: 'spotify',
+        candidates: [cached.canonicalGenre],
+        selectionReason: 'Session genre cache hit',
+      }, true);
+      continue;
     }
-    return true;
-  });
+
+    // Check curated registry for verified catalog homonym conflation (e.g. Guinea Pigs)
+    const classifiedOverride = classifyCanonicalGenre([], item.artistName, item.trackTitle);
+    if (classifiedOverride.source === 'curated') {
+      const info: ResolvedGenreInfo = {
+        canonicalGenre: classifiedOverride.canonicalGenre,
+        subgenre: classifiedOverride.subgenre,
+      };
+      knownGenreMap[item.artistName] = info;
+      inMemoryArtistGenreCache.set(key, info);
+      diagnoseArtistGenre(item.artistName, [], [], classifiedOverride, false);
+      continue;
+    }
+
+    missing.push(item);
+  }
 
   if (missing.length === 0) return knownGenreMap;
 
@@ -511,45 +564,104 @@ async function resolveArtistGenres(artistNames: string[], knownGenreMap: Record<
   for (let i = 0; i < missing.length; i += BATCH_SIZE) {
     const batch = missing.slice(i, i + BATCH_SIZE);
     await Promise.allSettled(
-      batch.map(async (artistName) => {
+      batch.map(async ({ artistName, trackTitle }) => {
         try {
-          // Attempt 1: Exact artist name lookup
-          let res = await fetchWithTimeout(
-            `https://itunes.apple.com/search?term=${encodeURIComponent(artistName)}&entity=musicArtist&limit=1`,
-            {},
-            5000
-          );
-          let genre: string | undefined;
+          let resolvedGenre: string | undefined;
 
-          if (res.ok) {
-            const itunesData = await res.json();
-            genre = itunesData.results?.[0]?.primaryGenreName;
-          }
-
-          // Attempt 2: If collaboration/delimiter present and no genre found, query primary artist
-          if (!genre && / feat\.?| ft\.?| vs\.?| & |,|\//i.test(artistName)) {
-            const primaryName = artistName.split(/ feat\.?| ft\.?| vs\.?| & |,|\//i)[0].trim();
-            if (primaryName && primaryName.toLowerCase() !== artistName.toLowerCase()) {
-              const res2 = await fetchWithTimeout(
-                `https://itunes.apple.com/search?term=${encodeURIComponent(primaryName)}&entity=musicArtist&limit=1`,
+          // Attempt 1: Specific Song-level lookup (avoids multi-artist / catalog-level homonym collisions)
+          if (trackTitle && trackTitle.trim().length > 0) {
+            try {
+              const songQuery = `${artistName} ${trackTitle}`;
+              const songRes = await fetchWithTimeout(
+                `https://itunes.apple.com/search?term=${encodeURIComponent(songQuery)}&entity=song&limit=1`,
                 {},
                 5000
               );
-              if (res2.ok) {
-                const itunesData2 = await res2.json();
-                genre = itunesData2.results?.[0]?.primaryGenreName;
+              if (songRes.ok) {
+                const songData = await songRes.json();
+                const songItem = songData.results?.[0];
+                if (songItem && songItem.primaryGenreName) {
+                  resolvedGenre = songItem.primaryGenreName;
+                }
+              }
+            } catch {
+              // Fall through to artist-level search
+            }
+          }
+
+          // Attempt 2: Exact artist-level lookup with name verification
+          if (!resolvedGenre) {
+            try {
+              const res = await fetchWithTimeout(
+                `https://itunes.apple.com/search?term=${encodeURIComponent(artistName)}&entity=musicArtist&limit=1`,
+                {},
+                5000
+              );
+              if (res.ok) {
+                const itunesData = await res.json();
+                const artistItem = itunesData.results?.[0];
+                if (artistItem?.primaryGenreName) {
+                  const itunesArtistName = (artistItem.artistName || '').toLowerCase();
+                  const targetName = artistName.toLowerCase();
+                  if (itunesArtistName.includes(targetName) || targetName.includes(itunesArtistName)) {
+                    resolvedGenre = artistItem.primaryGenreName;
+                  }
+                }
+              }
+            } catch {
+              // Fall through
+            }
+          }
+
+          // Attempt 3: Collaboration fallback if delimiters present
+          if (!resolvedGenre && / feat\.?| ft\.?| vs\.?| & |,|\//i.test(artistName)) {
+            const primaryName = artistName.split(/ feat\.?| ft\.?| vs\.?| & |,|\//i)[0].trim();
+            if (primaryName && primaryName.toLowerCase() !== artistName.toLowerCase()) {
+              try {
+                const res2 = await fetchWithTimeout(
+                  `https://itunes.apple.com/search?term=${encodeURIComponent(primaryName)}&entity=musicArtist&limit=1`,
+                  {},
+                  5000
+                );
+                if (res2.ok) {
+                  const itunesData2 = await res2.json();
+                  resolvedGenre = itunesData2.results?.[0]?.primaryGenreName;
+                }
+              } catch {
+                // Ignore
               }
             }
           }
 
-          // ONLY cache legitimate, positive resolved genres (never 'Unknown' or empty)
-          if (genre && genre !== 'Unknown' && genre.trim().length > 0) {
-            knownGenreMap[artistName] = genre;
-            inMemoryArtistGenreCache.set(artistName.trim().toLowerCase(), genre);
+          // 5. Classify the fallback genre into canonical taxonomy
+          if (resolvedGenre && resolvedGenre.trim().length > 0 && resolvedGenre.toLowerCase() !== 'unknown') {
+            const classified = classifyCanonicalGenre([resolvedGenre], artistName, trackTitle);
+            if (classified.canonicalGenre !== 'Unknown') {
+              const info: ResolvedGenreInfo = {
+                canonicalGenre: classified.canonicalGenre,
+                subgenre: classified.subgenre,
+              };
+              knownGenreMap[artistName] = info;
+              inMemoryArtistGenreCache.set(artistName.toLowerCase(), info);
+              diagnoseArtistGenre(artistName, [], [resolvedGenre], classified, false);
+              return;
+            }
           }
+
+          // If no legitimate genre could be resolved, mark Unknown honestly
+          // NEVER cache 'Unknown' permanently in inMemoryArtistGenreCache!
+          knownGenreMap[artistName] = { canonicalGenre: 'Unknown', subgenre: 'Unknown' };
+          diagnoseArtistGenre(artistName, [], resolvedGenre ? [resolvedGenre] : [], {
+            canonicalGenre: 'Unknown',
+            subgenre: 'Unknown',
+            confidence: 0,
+            source: 'unknown',
+            candidates: [],
+            selectionReason: 'No matching canonical genre found across sources',
+          }, false);
         } catch {
-          // On network error or timeout: DO NOT poison cache with 'Unknown'.
-          // Transient failure allows subsequent retry rather than permanent Unknown lock.
+          // Transient error: do NOT cache Unknown
+          knownGenreMap[artistName] = { canonicalGenre: 'Unknown', subgenre: 'Unknown' };
         }
       })
     );
@@ -657,23 +769,27 @@ export const fetchRecentlyPlayedEvents = async (
   const data: SpotifyRecentlyPlayedPayload = await res.json();
   if (!data.items || !Array.isArray(data.items)) return [];
 
-  const artistNames = data.items
-    .map((item) => item.track?.artists?.[0]?.name)
-    .filter((name): name is string => Boolean(name));
-  const genreMap = await resolveArtistGenres([...new Set(artistNames)], {});
+  const queries: ArtistGenreQuery[] = data.items
+    .map((item) => ({
+      artistName: item.track?.artists?.[0]?.name || '',
+      trackTitle: item.track?.name || '',
+    }))
+    .filter((q) => Boolean(q.artistName));
+  const genreMap = await resolveArtistGenres(queries, {});
 
   return data.items.map((item) => {
     const track: SpotifyTrackItem = item.track;
     const artist = track?.artists?.[0]?.name || 'Unknown Artist';
     const playedAt = item.played_at || new Date().toISOString();
-    const genre = genreMap[artist] || 'Unknown'; // R-04: Do not default unknown artists to Electronic
+    const info = genreMap[artist] || { canonicalGenre: 'Unknown', subgenre: 'Unknown' };
 
     return {
       id: `${track.id || track.name}_${playedAt}`,
       trackId: track.id || `track-${track.name}`,
       trackTitle: track.name,
       artistName: artist,
-      genre,
+      genre: info.canonicalGenre,
+      subgenre: info.subgenre,
       playedAt,
       durationMs: track.duration_ms,
       source: 'spotify_recent',
@@ -697,7 +813,7 @@ export const fetchSpotifyTopTracks = async (token: string, force = false): Promi
   }
   const data: SpotifyTopTracksPayload = await response.json();
 
-  let genreMap: Record<string, string> = {};
+  let genreMap: Record<string, ResolvedGenreInfo> = {};
   const uniqueArtists = [...new Set(data.items.map((item) => item.artists[0]?.name).filter(Boolean))] as string[];
 
   // Seed genreMap from session cache first
@@ -711,7 +827,7 @@ export const fetchSpotifyTopTracks = async (token: string, force = false): Promi
   // Only query /v1/artists for artists whose genre is NOT already known in cache
   const missingArtists = data.items.filter((item) => {
     const name = item.artists[0]?.name;
-    return !name || !genreMap[name];
+    return !name || !genreMap[name] || genreMap[name].canonicalGenre === 'Unknown';
   });
 
   const artistIds = [...new Set(missingArtists.map((item) => item.artists[0]?.id).filter(Boolean))].slice(0, 50);
@@ -722,9 +838,17 @@ export const fetchSpotifyTopTracks = async (token: string, force = false): Promi
       if (artistsResponse.ok) {
         const artistsData: SpotifySeveralArtistsPayload = await artistsResponse.json();
         artistsData.artists?.forEach((artist) => {
-          if (artist?.name && artist.genres?.length > 0) {
-            genreMap[artist.name] = artist.genres[0];
-            inMemoryArtistGenreCache.set(artist.name.trim().toLowerCase(), artist.genres[0]);
+          if (artist?.name && artist.genres && artist.genres.length > 0) {
+            const classified = classifyCanonicalGenre(artist.genres, artist.name);
+            if (classified.canonicalGenre !== 'Unknown') {
+              const info: ResolvedGenreInfo = {
+                canonicalGenre: classified.canonicalGenre,
+                subgenre: classified.subgenre,
+              };
+              genreMap[artist.name] = info;
+              inMemoryArtistGenreCache.set(artist.name.trim().toLowerCase(), info);
+              diagnoseArtistGenre(artist.name, artist.genres, [], classified, false);
+            }
           }
         });
       }
@@ -733,18 +857,28 @@ export const fetchSpotifyTopTracks = async (token: string, force = false): Promi
     }
   }
 
-  genreMap = await resolveArtistGenres(uniqueArtists, genreMap);
+  const queries: ArtistGenreQuery[] = data.items.map((item) => ({
+    artistName: item.artists[0]?.name || '',
+    trackTitle: item.name,
+  })).filter((q) => Boolean(q.artistName));
 
-  const records = data.items.map((item) => ({
-    id: item.id,
-    track: item.name,
-    artist: item.artists[0]?.name || 'Unknown Artist',
-    genre: genreMap[item.artists[0]?.name] || 'Unknown', // R-04: Do not default unknown artists to Electronic
-    bpm: null,
-    spotifyUrl: item.external_urls?.spotify,
-    album: item.album?.name,
-    duration: formatDurationMs(item.duration_ms),
-  }));
+  genreMap = await resolveArtistGenres(queries, genreMap);
+
+  const records = data.items.map((item) => {
+    const artistName = item.artists[0]?.name || 'Unknown Artist';
+    const info = genreMap[artistName] || { canonicalGenre: 'Unknown', subgenre: 'Unknown' };
+    return {
+      id: item.id,
+      track: item.name,
+      artist: artistName,
+      genre: info.canonicalGenre,
+      subgenre: info.subgenre,
+      bpm: null,
+      spotifyUrl: item.external_urls?.spotify,
+      album: item.album?.name,
+      duration: formatDurationMs(item.duration_ms),
+    };
+  });
 
   inMemoryTopTracks = records;
   return records;
