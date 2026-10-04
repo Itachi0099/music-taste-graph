@@ -684,3 +684,153 @@ export function renderMeteor(
   ctx.lineWidth = 0.9;
   ctx.stroke();
 }
+
+/**
+ * 9. SIGNAL SATELLITES (Cross-system Celestial Relays)
+ * - Small luminous nucleus
+ * - Subtle halo ring with restrained pulse
+ * - Clean, non-mechanical signal relay
+ */
+export function renderSignalSatellite(
+  ctx: CanvasRenderingContext2D,
+  params: {
+    satellite: import('../types').UniverseSignalSatellite;
+    timestamp: number;
+    zoom: number;
+    isSelected: boolean;
+    isHovered: boolean;
+    isDimmed: boolean;
+    isDark?: boolean;
+  }
+) {
+  const { satellite, timestamp, zoom, isSelected, isHovered, isDimmed, isDark = true } = params;
+  const { x, y, radius, pulsePhase, sourceColor, targetColor } = satellite;
+
+  const dimFactor = isDimmed ? 0.2 : 1.0;
+  const highlight = isSelected ? 1.6 : isHovered ? 1.3 : 1.0;
+
+  // Slow sinusoidal pulsation
+  const pulse = Math.sin(timestamp * 0.002 + pulsePhase);
+  const currentRadius = radius * (1.0 + pulse * 0.12) * (isSelected ? 1.3 : 1.0);
+
+  // A. Outer Relay Ring
+  const ringRadius = currentRadius * 2.2;
+  ctx.beginPath();
+  ctx.arc(x, y, ringRadius, 0, Math.PI * 2);
+  ctx.strokeStyle = `rgba(${sourceColor.glowRgb}, ${0.28 * dimFactor * highlight})`;
+  ctx.lineWidth = isSelected ? 1.2 : 0.8;
+  ctx.setLineDash(isSelected ? [] : [2, 4]);
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  // B. Restrained Glow Aura
+  if (zoom > 0.65 || isSelected || isHovered) {
+    const auraRadius = currentRadius * 3.4;
+    const aura = ctx.createRadialGradient(x, y, currentRadius * 0.2, x, y, auraRadius);
+    aura.addColorStop(0, `rgba(${sourceColor.glowRgb}, ${0.35 * dimFactor * highlight})`);
+    aura.addColorStop(0.6, `rgba(${targetColor.glowRgb}, ${0.12 * dimFactor * highlight})`);
+    aura.addColorStop(1, 'transparent');
+
+    ctx.fillStyle = aura;
+    ctx.beginPath();
+    ctx.arc(x, y, auraRadius, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // C. Luminous Central Nucleus
+  ctx.beginPath();
+  ctx.arc(x, y, currentRadius, 0, Math.PI * 2);
+  ctx.fillStyle = isDark
+    ? `rgba(${sourceColor.coreRgb}, ${0.95 * dimFactor * highlight})`
+    : `rgba(255, 255, 255, ${0.95 * dimFactor * highlight})`;
+  ctx.fill();
+
+  // D. Crisp Core Border
+  ctx.beginPath();
+  ctx.arc(x, y, currentRadius, 0, Math.PI * 2);
+  ctx.strokeStyle = `rgba(${sourceColor.glowRgb}, ${0.85 * dimFactor * highlight})`;
+  ctx.lineWidth = 1.0;
+  ctx.stroke();
+}
+
+/**
+ * 10. BLACK HOLES (Singularities of Extreme Behavioral Listening Gravity)
+ * - Deep black event horizon core
+ * - Luminous photon sphere & subtle relativistic accretion disk
+ * - Keplerian dust micro-particles
+ */
+export function renderBlackHole(
+  ctx: CanvasRenderingContext2D,
+  params: {
+    blackHole: import('../types').UniverseBlackHole;
+    timestamp: number;
+    zoom: number;
+    isSelected: boolean;
+    isHovered: boolean;
+    isDimmed: boolean;
+    isDark?: boolean;
+  }
+) {
+  const { blackHole, timestamp, isSelected, isHovered, isDimmed, isDark = true } = params;
+  const { x, y, coreRadius, eventHorizonRadius, accretionRadius, pulseRate, celestialColor } = blackHole;
+
+  const dimFactor = isDimmed ? 0.35 : 1.0;
+  const highlight = isSelected ? 1.3 : isHovered ? 1.15 : 1.0;
+
+  // Rotation phase for accretion disk
+  const rotAngle = timestamp * pulseRate;
+
+  // A. Luminous Accretion Disk (Restrained, elegant elliptical aura)
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.rotate(rotAngle);
+
+  const diskGrad = ctx.createRadialGradient(0, 0, coreRadius * 0.9, 0, 0, accretionRadius);
+  diskGrad.addColorStop(0, `rgba(${celestialColor.glowRgb}, ${0.5 * dimFactor * highlight})`);
+  diskGrad.addColorStop(0.35, `rgba(255, 220, 160, ${0.35 * dimFactor * highlight})`);
+  diskGrad.addColorStop(0.7, `rgba(${celestialColor.glowRgb}, ${0.12 * dimFactor})`);
+  diskGrad.addColorStop(1, 'transparent');
+
+  ctx.scale(1.0, 0.48); // Accretion disk tilt
+  ctx.fillStyle = diskGrad;
+  ctx.beginPath();
+  ctx.arc(0, 0, accretionRadius, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+
+  // B. Relativistic Dust Micro-Particles (Deterministic Keplerian orbits)
+  const particleCount = 8;
+  for (let i = 0; i < particleCount; i++) {
+    const pOrbit = coreRadius + 6 + (i * 3.8);
+    const pSpeed = 0.0028 * (1.0 + (particleCount - i) * 0.15);
+    const pAngle = timestamp * pSpeed + (i * (Math.PI * 2 / particleCount));
+    const px = x + Math.cos(pAngle) * pOrbit;
+    const py = y + Math.sin(pAngle) * (pOrbit * 0.55);
+
+    ctx.beginPath();
+    ctx.arc(px, py, 1.2, 0, Math.PI * 2);
+    ctx.fillStyle = `rgba(255, 240, 200, ${0.65 * dimFactor * highlight})`;
+    ctx.fill();
+  }
+
+  // C. Photon Sphere (Crisp, thin relativistic light ring)
+  ctx.beginPath();
+  ctx.arc(x, y, eventHorizonRadius, 0, Math.PI * 2);
+  ctx.strokeStyle = `rgba(255, 245, 225, ${0.85 * dimFactor * highlight})`;
+  ctx.lineWidth = isSelected ? 2.0 : 1.2;
+  ctx.stroke();
+
+  // D. Event Horizon (Pure opaque black void)
+  ctx.beginPath();
+  ctx.arc(x, y, coreRadius, 0, Math.PI * 2);
+  ctx.fillStyle = isDark ? '#020306' : '#14161b';
+  ctx.fill();
+
+  // E. Subtle boundary absorption edge
+  ctx.beginPath();
+  ctx.arc(x, y, coreRadius, 0, Math.PI * 2);
+  ctx.strokeStyle = 'rgba(0, 0, 0, 0.9)';
+  ctx.lineWidth = 1.0;
+  ctx.stroke();
+}
+

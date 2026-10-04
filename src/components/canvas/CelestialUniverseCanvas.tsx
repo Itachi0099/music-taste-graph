@@ -17,6 +17,8 @@ import {
   type StarFieldParticle,
   renderAsteroid,
   renderMeteor,
+  renderSignalSatellite,
+  renderBlackHole,
 } from '../../utils/celestialMaterials';
 import { screenToWorld, calculateHyperspaceEase, hitTestUniverse } from './celestialMath';
 import { computeSearchMatches } from './celestialSearch';
@@ -197,6 +199,10 @@ export const CelestialUniverseCanvas: React.FC<CelestialUniverseCanvasProps> = (
       triggerHyperspaceTravel(selection.item.x, selection.item.y, 2.2, selection.item.name);
     } else if (selection.type === 'meteor') {
       triggerHyperspaceTravel(selection.item.currentX, selection.item.currentY, 2.0, selection.item.title);
+    } else if (selection.type === 'signalSatellite') {
+      triggerHyperspaceTravel(selection.item.x, selection.item.y, 2.4, `${selection.item.sourceGenre} - ${selection.item.targetGenre} Relay`);
+    } else if (selection.type === 'blackHole') {
+      triggerHyperspaceTravel(selection.item.x, selection.item.y, 2.2, selection.item.subjectName);
     }
   }, [selection, triggerHyperspaceTravel]);
 
@@ -446,6 +452,80 @@ export const CelestialUniverseCanvas: React.FC<CelestialUniverseCanvasProps> = (
         ctx.stroke();
         ctx.setLineDash([]);
       });
+
+      // 3b. Render Signal Satellites (Cross-System Influence Relays)
+      if (universeData.signalSatellites && universeData.signalSatellites.length > 0) {
+        universeData.signalSatellites.forEach((sat) => {
+          // LOD culling: at high zoom show all; at wide zoom show prominent ones
+          if (cam.zoom < 0.65 && sat.strength < 0.60) return;
+
+          const isSatSelected = selection?.type === 'signalSatellite' && selection.item.id === sat.id;
+          const isSatHovered = currentHover?.type === 'signalSatellite' && currentHover.item.id === sat.id;
+
+          const isRelatedGenre = selection?.type === 'genre' && (selection.item.name === sat.sourceGenre || selection.item.name === sat.targetGenre);
+          const isRelatedArtist = selection?.type === 'artist' && sat.bridgeArtist === selection.item.name;
+
+          const isDimmed = selection !== null && !isSatSelected && !isRelatedGenre && !isRelatedArtist;
+
+          renderSignalSatellite(ctx, {
+            satellite: sat,
+            timestamp: time,
+            zoom: cam.zoom,
+            isSelected: isSatSelected,
+            isHovered: isSatHovered,
+            isDimmed,
+            isDark,
+          });
+
+          // Label on hover, select, or high zoom
+          if (isSatSelected || isSatHovered || (cam.zoom >= 1.4 && !isDimmed)) {
+            ctx.save();
+            ctx.textAlign = 'center';
+            ctx.font = `${isSatSelected ? '600' : '500'} 9px ${FONT_SANS}`;
+            ctx.fillStyle = isSatSelected
+              ? '#FFFFFF'
+              : (isDark ? 'rgba(255, 255, 255, 0.85)' : 'rgba(20, 20, 20, 0.85)');
+            ctx.fillText(`${sat.sourceGenre} ↔ ${sat.targetGenre}`, sat.x, sat.y + sat.radius + 10);
+            ctx.restore();
+          }
+        });
+      }
+
+      // 3c. Render Dynamic Black Holes (Extreme Gravitational Singularities)
+      if (universeData.blackHoles && universeData.blackHoles.length > 0) {
+        universeData.blackHoles.forEach((bh) => {
+          const isBhSelected = selection?.type === 'blackHole' && selection.item.id === bh.id;
+          const isBhHovered = currentHover?.type === 'blackHole' && currentHover.item.id === bh.id;
+
+          const isRelatedGenre = selection?.type === 'genre' && bh.subjectGenre === selection.item.name;
+          const isRelatedArtist = selection?.type === 'artist' && bh.subjectName === selection.item.name;
+
+          const isDimmed = selection !== null && !isBhSelected && !isRelatedGenre && !isRelatedArtist;
+
+          renderBlackHole(ctx, {
+            blackHole: bh,
+            timestamp: time,
+            zoom: cam.zoom,
+            isSelected: isBhSelected,
+            isHovered: isBhHovered,
+            isDimmed,
+            isDark,
+          });
+
+          // Singular identifier label
+          if (isBhSelected || isBhHovered || (cam.zoom >= 0.75 && !isDimmed)) {
+            ctx.save();
+            ctx.textAlign = 'center';
+            ctx.font = `600 10.5px ${FONT_SANS}`;
+            ctx.fillStyle = isBhSelected ? '#FFFFFF' : (isDark ? 'rgba(255, 255, 255, 0.95)' : 'rgba(10, 10, 10, 0.95)');
+            ctx.fillText(bh.subjectName, bh.x, bh.y + bh.eventHorizonRadius + 18);
+            ctx.font = `8px ${FONT_MONO}`;
+            ctx.fillStyle = `rgba(${bh.celestialColor.glowRgb}, 0.9)`;
+            ctx.fillText(`GRAVITATIONAL SINGULARITY · ${Math.round(bh.gravityScore * 100)}%`, bh.x, bh.y + bh.eventHorizonRadius + 29);
+            ctx.restore();
+          }
+        });
+      }
 
       // 4. Render Genre Systems (Luminous Celestial Cores & Orbiting Subgenres)
       universeData.genres.forEach((genre) => {
@@ -787,6 +867,22 @@ export const CelestialUniverseCanvas: React.FC<CelestialUniverseCanvasProps> = (
 
           ast.x = originX + Math.cos(ast.orbitAngle) * ast.orbitRadius;
           ast.y = originY + Math.sin(ast.orbitAngle) * ast.orbitRadius;
+
+          // Subtle gravitational lensing deflection if an asteroid is near a black hole
+          if (universeData.blackHoles && universeData.blackHoles.length > 0) {
+            for (const bh of universeData.blackHoles) {
+              const dx = bh.x - ast.x;
+              const dy = bh.y - ast.y;
+              const distSq = dx * dx + dy * dy;
+              // Deflection active within 240px
+              if (distSq < 57600 && distSq > 100) {
+                const dist = Math.sqrt(distSq);
+                const pull = (1 - dist / 240) * 12 * bh.gravityScore;
+                ast.x += (dx / dist) * pull;
+                ast.y += (dy / dist) * pull;
+              }
+            }
+          }
 
           const astCelestialCol = ast.celestialColor || getCelestialGenreColor(ast.parentGenre);
 
@@ -1178,6 +1274,8 @@ export const CelestialUniverseCanvas: React.FC<CelestialUniverseCanvasProps> = (
               {hoveredEntity.type === 'discovery' && `${hoveredEntity.item.recommendation.artist} (${Math.round(hoveredEntity.item.recommendation.score * 100)}% Taste Match)`}
               {hoveredEntity.type === 'asteroid' && `${hoveredEntity.item.name} · ${hoveredEntity.item.trackCount} ${hoveredEntity.item.trackCount === 1 ? 'track' : 'tracks'} · ${hoveredEntity.item.parentGenre}${hoveredEntity.item.relatedGenre ? ` ↔ ${hoveredEntity.item.relatedGenre}` : ''}`}
               {hoveredEntity.type === 'meteor' && `"${hoveredEntity.item.title}" — ${hoveredEntity.item.artist} (${hoveredEntity.item.reason})`}
+              {hoveredEntity.type === 'signalSatellite' && `${hoveredEntity.item.sourceGenre} ⇄ ${hoveredEntity.item.targetGenre}${hoveredEntity.item.bridgeArtist ? ` via ${hoveredEntity.item.bridgeArtist}` : ' Relay'}`}
+              {hoveredEntity.type === 'blackHole' && `${hoveredEntity.item.subjectName} · ${Math.round(hoveredEntity.item.gravityScore * 100)}% Gravity Pull (${hoveredEntity.item.type})`}
             </span>
           </div>
         )}
@@ -1583,6 +1681,102 @@ export const CelestialUniverseCanvas: React.FC<CelestialUniverseCanvasProps> = (
                 )}
               </button>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* ============================================================ */}
+      {/* SIGNAL SATELLITE DETAIL PANEL (CROSS-SYSTEM INFLUENCE RELAY) */}
+      {/* ============================================================ */}
+      {selection?.type === 'signalSatellite' && (
+        <div className="absolute bottom-6 right-6 z-30 w-84 rounded-lg bg-[#111215]/95 backdrop-blur-md border border-white/15 p-4 shadow-xl animate-in slide-in-from-bottom-2 duration-200 text-white">
+          <div className="flex items-center justify-between text-xs font-mono text-white/50 mb-2">
+            <span className="uppercase text-amber-300 font-semibold flex items-center gap-1.5">
+              <span className="w-2 h-2 rounded-full bg-amber-400 inline-block shadow-[0_0_8px_rgba(251,191,36,0.8)]" />
+              Signal Satellite
+            </span>
+            <span className="px-2 py-0.5 rounded bg-white/10 text-white/90 font-mono text-[11px] border border-white/10">
+              Relay {Math.round(selection.item.strength * 100)}%
+            </span>
+          </div>
+
+          <h3 className="font-serif text-2xl font-bold tracking-tight text-white mb-1 leading-snug">
+            {selection.item.sourceGenre} ⇄ {selection.item.targetGenre}
+          </h3>
+
+          <p className="text-xs text-white/70 font-mono mb-3">
+            {selection.item.relationshipType === 'bridge_artist' ? `Bridge: ${selection.item.bridgeArtist}` : 'Genre Affinity Relay'}
+          </p>
+
+          <div className="mb-4 space-y-2">
+            <div className="p-2.5 rounded-lg bg-white/5 border border-white/10 text-xs text-white/90 leading-relaxed font-sans">
+              {selection.item.evidenceExplanation}
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2 pt-2">
+            <button
+              onClick={() => {
+                triggerHyperspaceTravel(
+                  selection.item.x,
+                  selection.item.y,
+                  2.6,
+                  `${selection.item.sourceGenre} ⇄ ${selection.item.targetGenre}`
+                );
+              }}
+              className="flex-1 py-2 px-3 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 border border-amber-400/40 text-xs font-medium text-amber-200 flex items-center justify-center gap-1.5 transition-all"
+            >
+              <Zap size={13} className="text-amber-400" />
+              <span>Inspect Relay Focus</span>
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* ============================================================ */}
+      {/* BLACK HOLE DETAIL PANEL (GRAVITATIONAL SINGULARITY)          */}
+      {/* ============================================================ */}
+      {selection?.type === 'blackHole' && (
+        <div className="absolute bottom-6 right-6 z-30 w-84 rounded-lg bg-[#0A0B0E]/98 backdrop-blur-md border border-purple-500/30 p-4 shadow-2xl animate-in slide-in-from-bottom-2 duration-200 text-white">
+          <div className="flex items-center justify-between text-xs font-mono text-white/50 mb-2">
+            <span className="uppercase text-purple-300 font-semibold flex items-center gap-1.5">
+              <span className="w-2.5 h-2.5 rounded-full bg-purple-500 animate-pulse inline-block shadow-[0_0_12px_rgba(168,85,247,0.9)]" />
+              {selection.item.type} singularity
+            </span>
+            <span className="px-2 py-0.5 rounded bg-purple-500/20 text-purple-200 font-mono text-[11px] border border-purple-500/30 font-semibold">
+              Gravity {Math.round(selection.item.gravityScore * 100)}%
+            </span>
+          </div>
+
+          <h3 className="font-serif text-2xl font-bold tracking-tight text-white mb-1 leading-snug">
+            {selection.item.subjectName}
+          </h3>
+
+          <p className="text-xs text-white/70 font-mono mb-3">
+            Domain: {selection.item.subjectGenre}
+          </p>
+
+          <div className="mb-4 space-y-2">
+            <div className="p-2.5 rounded-lg bg-white/5 border border-white/10 text-xs text-white/90 leading-relaxed font-sans">
+              {selection.item.whyExplanation}
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2 pt-2">
+            <button
+              onClick={() => {
+                triggerHyperspaceTravel(
+                  selection.item.x,
+                  selection.item.y,
+                  2.6,
+                  selection.item.subjectName
+                );
+              }}
+              className="flex-1 py-2 px-3 rounded-lg bg-purple-500/20 hover:bg-purple-500/30 border border-purple-400/40 text-xs font-medium text-purple-200 flex items-center justify-center gap-1.5 transition-all"
+            >
+              <Zap size={13} className="text-purple-400" />
+              <span>Enter Event Horizon</span>
+            </button>
           </div>
         </div>
       )}

@@ -14,6 +14,8 @@ import type {
 import { getCelestialGenreColor } from './celestialColors';
 import { generateDiscoveryRecommendations } from './discoveryEngine';
 import { extractTasteProfile } from './tasteProfile';
+import { deriveSignalSatellites } from './signalSatellites';
+import { deriveBlackHoles } from './blackHoleEngine';
 
 // Semantic genre relationships and affinity matrix for stable, organic spatial placement
 const GENRE_AFFINITIES: Record<string, string[]> = {
@@ -60,7 +62,7 @@ export function buildCelestialUniverse(
   playbackState?: SpotifyPlaybackState | null
 ): CelestialUniverseData {
   if (!records.length) {
-    return { genres: [], artists: [], bridges: [], allTracks: [] };
+    return { genres: [], artists: [], bridges: [], allTracks: [], signalSatellites: [], blackHoles: [] };
   }
 
   const tasteProfile = extractTasteProfile(records);
@@ -921,6 +923,18 @@ export function buildCelestialUniverse(
     }
   }
 
+  // 8. Derive Signal Satellites (Sparse, meaningful cross-system relationship beacons)
+  const signalSatellites = deriveSignalSatellites(genreSystems, bridgeList, GENRE_AFFINITIES);
+
+  // 9. Derive Black Holes (Singularities of extreme behavioral listening gravity)
+  const blackHoles = deriveBlackHoles({
+    records,
+    listeningEvents,
+    tasteProfile,
+    genres: genreSystems,
+    artists: universeArtists,
+  });
+
   return {
     genres: genreSystems,
     artists: universeArtists,
@@ -929,6 +943,8 @@ export function buildCelestialUniverse(
     discoveries: celestialDiscoveries,
     asteroids: asteroidsList,
     meteors: meteorsList,
+    signalSatellites,
+    blackHoles,
   };
 }
 

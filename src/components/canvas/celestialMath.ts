@@ -96,6 +96,26 @@ export function hitTestUniverse(
     }
   }
 
+  // 3B. Black Holes (Singularities of extreme gravity)
+  if (universeData.blackHoles) {
+    for (const bh of universeData.blackHoles) {
+      const dist = Math.hypot(bh.x - worldPos.x, bh.y - worldPos.y);
+      if (dist <= bh.eventHorizonRadius + 10 + interactionRadiusExtra) {
+        return { type: 'blackHole', item: bh };
+      }
+    }
+  }
+
+  // 3C. Signal Satellites (Cross-system relays)
+  if (universeData.signalSatellites) {
+    for (const sat of universeData.signalSatellites) {
+      const dist = Math.hypot(sat.x - worldPos.x, sat.y - worldPos.y);
+      if (dist <= sat.radius + 12 + interactionRadiusExtra) {
+        return { type: 'signalSatellite', item: sat };
+      }
+    }
+  }
+
   // 4. Tracks (visible at deep zoom or when artist selected)
   if (currentZoomLevel >= 3 || selection?.type === 'artist') {
     for (const artist of universeData.artists) {

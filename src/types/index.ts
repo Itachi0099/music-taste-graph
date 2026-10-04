@@ -352,6 +352,43 @@ export interface UniverseMeteor {
 
 export type ZoomLevel = 1 | 2 | 3 | 4;
 
+export type SignalRelationshipType = 'bridge_artist' | 'genre_affinity' | 'cross_presence';
+
+export interface UniverseSignalSatellite {
+  id: string;
+  sourceGenre: string;
+  targetGenre: string;
+  relationshipType: SignalRelationshipType;
+  x: number;
+  y: number;
+  radius: number;
+  strength: number; // 0.0 - 1.0
+  pulsePhase: number;
+  bridgeArtist?: string;
+  evidenceExplanation: string;
+  sourceColor: import('../utils/celestialColors').CelestialColorIdentity;
+  targetColor: import('../utils/celestialColors').CelestialColorIdentity;
+}
+
+export type BlackHoleType = 'artist' | 'genre' | 'cluster';
+
+export interface UniverseBlackHole {
+  id: string;
+  type: BlackHoleType;
+  subjectName: string;
+  subjectGenre: string;
+  x: number;
+  y: number;
+  coreRadius: number; // Event horizon core
+  eventHorizonRadius: number; // Lensing boundary
+  accretionRadius: number; // Luminous accretion disk radius
+  gravityScore: number; // 0.0 - 1.0 (calibrated >= 0.75)
+  pulseRate: number;
+  whyExplanation: string;
+  color: string;
+  celestialColor: import('../utils/celestialColors').CelestialColorIdentity;
+}
+
 export interface CelestialUniverseData {
   genres: UniverseGenreSystem[];
   artists: UniverseArtist[];
@@ -360,6 +397,8 @@ export interface CelestialUniverseData {
   discoveries?: CelestialDiscoverySystem[];
   asteroids?: UniverseAsteroid[];
   meteors?: UniverseMeteor[];
+  signalSatellites?: UniverseSignalSatellite[];
+  blackHoles?: UniverseBlackHole[];
 }
 
 export type DiscoveryCategory = 'nearby' | 'adjacent' | 'unknown';
@@ -408,5 +447,7 @@ export type UniverseSelection =
   | { type: 'discovery'; item: CelestialDiscoverySystem }
   | { type: 'asteroid'; item: UniverseAsteroid }
   | { type: 'meteor'; item: UniverseMeteor }
+  | { type: 'signalSatellite'; item: UniverseSignalSatellite }
+  | { type: 'blackHole'; item: UniverseBlackHole }
   | null;
 
