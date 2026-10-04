@@ -1,4 +1,5 @@
 import type { RawTrackRecord, Track, Artist, Genre, ListeningEvent } from '../types';
+import { evaluateGenreEvidence } from './genreKnowledge/evidenceEngine';
 
 export interface NormalizedMusicDatabase {
   tracks: Map<string, Track>;
@@ -23,7 +24,7 @@ export function createEmptyDatabase(): NormalizedMusicDatabase {
 
 /**
  * Normalizes raw records (from CSV, JSON, presets, or Spotify) into
- * canonical entity structures.
+ * canonical entity structures using the authoritative Genre Knowledge Engine.
  */
 export function normalizeMusicRecords(
   records: RawTrackRecord[],
@@ -36,15 +37,26 @@ export function normalizeMusicRecords(
   for (const rec of records) {
     const trackTitle = (rec.track || '').trim();
     const artistName = (rec.artist || 'Unknown Artist').trim();
-    const genreName = (rec.genre || 'Unknown').trim();
-    const subgenreName = rec.subgenre?.trim();
-
     if (!trackTitle) continue;
+
+    // Authoritative Genre Knowledge Engine resolution
+    const evidence = evaluateGenreEvidence({
+      artistName,
+      trackTitle,
+      spotifyGenres: [rec.genre, rec.subgenre || ''].filter(Boolean),
+    });
+
+    const canonicalGenre = evidence.canonicalGenre !== 'Unknown'
+      ? evidence.canonicalGenre
+      : (rec.genre || 'Unknown').trim();
+    const subgenreName = (evidence.subgenre && evidence.subgenre !== 'Unknown')
+      ? evidence.subgenre
+      : (rec.subgenre?.trim() || undefined);
 
     // Stable track key
     const trackId = rec.id || `track-${normalizeId(artistName)}--${normalizeId(trackTitle)}`;
     const artistId = `artist-${normalizeId(artistName)}`;
-    const genreId = `genre-${normalizeId(genreName)}`;
+    const genreId = `genre-${normalizeId(canonicalGenre)}`;
 
     // Upsert Track
     if (!db.tracks.has(trackId)) {
@@ -52,7 +64,7 @@ export function normalizeMusicRecords(
         id: trackId,
         title: trackTitle,
         artistName,
-        genre: genreName,
+        genre: canonicalGenre,
         subgenre: subgenreName,
         album: rec.album,
         year: rec.year,
@@ -61,22 +73,26 @@ export function normalizeMusicRecords(
         spotifyUrl: rec.spotifyUrl,
         source,
       });
-      rawList.push(rec);
+      rawList.push({
+        ...rec,
+        genre: canonicalGenre,
+        subgenre: subgenreName,
+      });
     }
 
     // Upsert Artist
     const existingArtist = db.artists.get(artistId);
     if (existingArtist) {
-      if (!existingArtist.genres.includes(genreName)) {
-        existingArtist.genres.push(genreName);
+      if (!existingArtist.genres.includes(canonicalGenre)) {
+        existingArtist.genres.push(canonicalGenre);
       }
       existingArtist.trackCount++;
     } else {
       db.artists.set(artistId, {
         id: artistId,
         name: artistName,
-        primaryGenre: genreName,
-        genres: [genreName],
+        primaryGenre: canonicalGenre,
+        genres: [canonicalGenre],
         trackCount: 1,
       });
     }
@@ -88,13 +104,14 @@ export function normalizeMusicRecords(
     } else {
       db.genres.set(genreId, {
         id: genreId,
-        name: genreName,
+        name: canonicalGenre,
         trackCount: 1,
         artistCount: 1,
         relatedGenreNames: [],
       });
     }
   }
+
 
   // Recalculate artist count for genres
   for (const genre of db.genres.values()) {

@@ -143,18 +143,23 @@ export const TopNavigation: React.FC<TopNavigationProps> = ({
 
       {/* Right Actions */}
       <div className="flex items-center gap-2 md:gap-3 text-xs">
-        {/* Preset Selector */}
+        {/* Universe / Sector / Music Source Selector */}
         <select
           value={preset}
           onChange={(e) => onPresetChange(e.target.value)}
-          aria-label="Preset music collection"
+          aria-label="Universe view and data source selector"
           className="hidden sm:block text-xs bg-transparent border-0 text-[var(--text-secondary)] hover:text-[var(--text-primary)] cursor-pointer focus:outline-none pr-1"
         >
-          <option value="electronic" className="bg-[var(--bg-card)] text-[var(--text-primary)]">Electronic / Club</option>
-          <option value="indie" className="bg-[var(--bg-card)] text-[var(--text-primary)]">Indie / Alternative</option>
-          <option value="eclectic" className="bg-[var(--bg-card)] text-[var(--text-primary)]">Eclectic Mix</option>
-          <option value="spotify" className="bg-[var(--bg-card)] text-[var(--text-primary)]">Spotify Stream</option>
-          <option value="" className="bg-[var(--bg-card)] text-[var(--text-primary)]">Custom Library</option>
+          <optgroup label="Universe Sectors" className="bg-[var(--bg-card)] text-[var(--text-muted)] font-mono text-[10px] tracking-wider uppercase">
+            <option value="all" className="bg-[var(--bg-card)] text-[var(--text-primary)] font-sans normal-case text-xs">Full Universe</option>
+            <option value="electronic" className="bg-[var(--bg-card)] text-[var(--text-primary)] font-sans normal-case text-xs">Electronic / Club</option>
+            <option value="indie" className="bg-[var(--bg-card)] text-[var(--text-primary)] font-sans normal-case text-xs">Indie / Alternative</option>
+            <option value="eclectic" className="bg-[var(--bg-card)] text-[var(--text-primary)] font-sans normal-case text-xs">Eclectic Mix</option>
+          </optgroup>
+          <optgroup label="Your Music" className="bg-[var(--bg-card)] text-[var(--text-muted)] font-mono text-[10px] tracking-wider uppercase">
+            <option value="spotify" className="bg-[var(--bg-card)] text-[var(--text-primary)] font-sans normal-case text-xs">Spotify Stream</option>
+            <option value="" className="bg-[var(--bg-card)] text-[var(--text-primary)] font-sans normal-case text-xs">Custom Library</option>
+          </optgroup>
         </select>
 
         {/* Theme Toggle Button */}

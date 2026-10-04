@@ -11,7 +11,7 @@ const InsightsModal = lazy(() => import('./components/InsightsModal').then((m) =
 const RecommendationsDrawer = lazy(() => import('./components/RecommendationsDrawer').then((m) => ({ default: m.RecommendationsDrawer })));
 const DiscoveryPanel = lazy(() => import('./components/DiscoveryPanel').then((m) => ({ default: m.DiscoveryPanel })));
 
-import electronicData from './data/electronic_club.json';
+import unifiedUniverseData from './data/unified_universe.json';
 
 import { buildGraphFromRecords } from './utils/graphBuilder';
 import { getLayoutedElements } from './utils/layoutEngine';
@@ -45,8 +45,8 @@ import type {
 import { SlidersHorizontal, Orbit, Network, AlertCircle, RefreshCw } from 'lucide-react';
 
 function App() {
-  const [records, setRecords] = useState<RawTrackRecord[]>(electronicData);
-  const [preset, setPreset] = useState<string>('electronic');
+  const [records, setRecords] = useState<RawTrackRecord[]>(unifiedUniverseData);
+  const [preset, setPreset] = useState<string>('all');
   
   // Normalized Listening Events & Playback State
   const [listeningEvents, setListeningEvents] = useState<ListeningEvent[]>([]);
@@ -199,21 +199,20 @@ function App() {
     return summary.moodBreakdown.map((m) => m.mood);
   }, [summary]);
 
-  // Preset switching
-  const handlePresetChange = async (newPreset: string) => {
+  // Preset & Sector switching: All sectors operate over one unified universe dataset
+  const handlePresetChange = (newPreset: string) => {
     setPreset(newPreset);
     setSelectedNode(null);
+    setUniverseSelection(null);
     setExpandedGenreIds(new Set());
     setExpandedArtistIds(new Set());
 
-    if (newPreset === 'electronic') {
-      setRecords(electronicData);
-    } else if (newPreset === 'indie') {
-      const data = await import('./data/indie_alternative.json');
-      setRecords(data.default);
-    } else if (newPreset === 'eclectic') {
-      const data = await import('./data/eclectic_mix.json');
-      setRecords(data.default);
+    // When switching to any universe view ('all', 'electronic', 'indie', 'eclectic'),
+    // ensure records is set to unifiedUniverseData (single unified dataset, 0 data duplication/loss)
+    if (newPreset === 'all' || newPreset === 'electronic' || newPreset === 'indie' || newPreset === 'eclectic') {
+      if (records !== unifiedUniverseData) {
+        setRecords(unifiedUniverseData);
+      }
     }
   };
 
@@ -601,9 +600,9 @@ function App() {
     });
     setPlaybackState(null);
     setListeningEvents([]);
-    // Restore default preset
-    setPreset('electronic');
-    setRecords(electronicData);
+    // Restore default full universe
+    setPreset('all');
+    setRecords(unifiedUniverseData);
   }, [stopPolling]);
 
   // Automatic Spotify session restoration & continuous polling loop
@@ -904,6 +903,8 @@ function App() {
               discoveryFilter={discoveryCategoryFilter}
               onDiscoveryFilterChange={setDiscoveryCategoryFilter}
               isDark={isDark}
+              activeSector={preset}
+              onSectorChange={setPreset}
             />
           ) : (
             <Suspense

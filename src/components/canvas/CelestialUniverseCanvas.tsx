@@ -20,6 +20,7 @@ import {
 } from '../../utils/celestialMaterials';
 import { screenToWorld, calculateHyperspaceEase, hitTestUniverse } from './celestialMath';
 import { computeSearchMatches } from './celestialSearch';
+import { getSectorCameraTarget, isSectorId, getSector } from '../../utils/sectors';
 
 export type { UniverseSelection };
 
@@ -33,6 +34,8 @@ interface CelestialUniverseCanvasProps {
   discoveryFilter?: DiscoveryCategory | 'all';
   onDiscoveryFilterChange?: (filter: DiscoveryCategory | 'all') => void;
   isDark?: boolean;
+  activeSector?: string;
+  onSectorChange?: (sectorId: string) => void;
 }
 
 const FONT_SANS = '"Plus Jakarta Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
@@ -48,6 +51,8 @@ export const CelestialUniverseCanvas: React.FC<CelestialUniverseCanvasProps> = (
   discoveryFilter = 'all',
   onDiscoveryFilterChange,
   isDark = true,
+  activeSector = 'all',
+  onSectorChange,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -63,10 +68,10 @@ export const CelestialUniverseCanvas: React.FC<CelestialUniverseCanvasProps> = (
   }>({
     x: 0,
     y: 0,
-    zoom: 0.65,
+    zoom: 0.52,
     targetX: 0,
     targetY: 0,
-    targetZoom: 0.65,
+    targetZoom: 0.52,
   });
 
   // Drag / pan state
@@ -195,11 +200,24 @@ export const CelestialUniverseCanvas: React.FC<CelestialUniverseCanvasProps> = (
     }
   }, [selection, triggerHyperspaceTravel]);
 
+  // Handle sector navigation with Hyperspace travel
+  const prevSectorRef = useRef<string | undefined>(activeSector);
+  useEffect(() => {
+    if (activeSector === undefined) return;
+    if (prevSectorRef.current === activeSector) return;
+    prevSectorRef.current = activeSector;
+
+    if (!universeData.genres || universeData.genres.length === 0) return;
+    const target = getSectorCameraTarget(activeSector, universeData.genres);
+    triggerHyperspaceTravel(target.x, target.y, target.zoom, target.destName);
+  }, [activeSector, universeData.genres, triggerHyperspaceTravel]);
+
   // Fit Universe on reset
   const handleResetUniverse = useCallback(() => {
     onSelect(null);
-    triggerHyperspaceTravel(0, 0, 0.65, 'Entire Universe');
-  }, [onSelect, triggerHyperspaceTravel]);
+    if (onSectorChange) onSectorChange('all');
+    triggerHyperspaceTravel(0, 0, 0.52, 'Full Universe');
+  }, [onSelect, onSectorChange, triggerHyperspaceTravel]);
 
   const handleZoom = (delta: number) => {
     const next = Math.max(0.08, Math.min(3.6, cameraRef.current.targetZoom + delta));
@@ -1020,6 +1038,13 @@ export const CelestialUniverseCanvas: React.FC<CelestialUniverseCanvasProps> = (
           >
             Universe
           </button>
+
+          {activeSector && activeSector !== 'all' && isSectorId(activeSector) && !selection && (
+            <>
+              <span className="text-white/30">/</span>
+              <span className="text-amber-300 font-medium">{getSector(activeSector).name} Sector</span>
+            </>
+          )}
 
           {selection?.type === 'genre' && (
             <>
