@@ -20,11 +20,14 @@ import { computeAnalytics } from './utils/analytics';
 import { generateDiscoveryRecommendations } from './utils/discoveryEngine';
 import { 
   getSpotifyToken, 
+  loginWithSpotify,
   fetchSpotifyUserProfile,
   fetchSpotifyTopTracks, 
   fetchCurrentlyPlaying, 
   fetchRecentlyPlayedEvents,
   clearTokens,
+  SpotifyApiError,
+  logSpotifySyncDiagnostic,
 } from './utils/spotify';
 import { normalizeMusicRecords, ingestListeningEvents } from './utils/normalizer';
 import type { 
@@ -35,6 +38,7 @@ import type {
   ListeningEvent, 
   SpotifyPlaybackState,
   SpotifyStatusInfo,
+  SpotifyConnectionState,
 } from './types';
 import { SlidersHorizontal, Orbit, Network, AlertCircle, RefreshCw } from 'lucide-react';
 
@@ -254,35 +258,97 @@ function App() {
         }
       }
 
-      // 3. Preserve existing status properties (including verified userId and userName)
-      setSpotifyStatus((prev) => ({
-        ...prev,
-        state: current?.isPlaying ? 'live' : 'updated_recently',
-        lastSyncAt: Date.now(),
-        label: prev.userName
-          ? `Spotify · ${prev.userName}`
-          : current?.isPlaying
+      // 3. Update status safely without overwriting error/access_denied states
+      setSpotifyStatus((prev) => {
+        if (prev.state === 'access_denied' || prev.state === 'unauthorized') {
+          return prev;
+        }
+
+        const isPlaying = current?.isPlaying;
+        let newState: SpotifyConnectionState = prev.state;
+        if (isPlaying) {
+          newState = 'live';
+        } else if (prev.state === 'empty_library' && recordsRef.current.length === 0) {
+          newState = 'empty_library';
+        } else {
+          newState = 'updated_recently';
+        }
+
+        return {
+          ...prev,
+          state: newState,
+          lastSyncAt: Date.now(),
+          label: isPlaying
             ? 'Spotify · Live'
-            : 'Spotify · Synced',
-      }));
-    } catch (err) {
+            : newState === 'empty_library'
+              ? 'Spotify · Connected'
+              : 'Spotify · Synced',
+        };
+      });
+    } catch (err: unknown) {
+      if (err instanceof SpotifyApiError) {
+        if (err.status === 403) {
+          isSpotifyActiveRef.current = false;
+          stopPolling();
+          setRecords([]);
+          setListeningEvents([]);
+          setPlaybackState(null);
+          setSpotifyStatus((prev) => ({
+            ...prev,
+            state: 'access_denied',
+            lastSyncAt: null,
+            label: 'Spotify · Access unavailable',
+            errorMessage: "Your Spotify account was authenticated, but Spotify isn't currently allowing this account to access this Development Mode app. Ask the app owner to grant access, or try again later.",
+          }));
+          return;
+        }
+        if (err.status === 401) {
+          isSpotifyActiveRef.current = false;
+          stopPolling();
+          setPlaybackState(null);
+          setSpotifyStatus((prev) => ({
+            ...prev,
+            state: 'unauthorized',
+            lastSyncAt: null,
+            label: 'Spotify · Reconnect required',
+            errorMessage: 'Spotify session expired. Please reconnect.',
+          }));
+          return;
+        }
+        if (err.status === 429) {
+          setSpotifyStatus((prev) => ({
+            ...prev,
+            state: 'rate_limited',
+            label: 'Spotify · Rate limited',
+          }));
+          return;
+        }
+        if (err.classification === 'network_error' || err.classification === 'offline') {
+          setSpotifyStatus((prev) => ({
+            ...prev,
+            state: 'offline',
+            label: 'Spotify · Offline',
+          }));
+          return;
+        }
+      }
       console.warn('Spotify reconcile error (keeping local universe intact):', err);
     } finally {
       isReconcilingRef.current = false;
     }
-  }, []);
+  }, [stopPolling]);
 
-  // Setup background polling (every 20s while tab is visible)
+  // Setup background polling (every 20s while tab is visible and active)
   const startPolling = useCallback(() => {
     // Clear any existing interval to guarantee at most ONE active interval
     if (pollIntervalRef.current) {
       clearInterval(pollIntervalRef.current);
       pollIntervalRef.current = null;
     }
-    if (document.hidden) return; // Do not poll while document is hidden
+    if (document.hidden || !isSpotifyActiveRef.current) return;
 
     pollIntervalRef.current = setInterval(async () => {
-      if (document.hidden) return;
+      if (document.hidden || !isSpotifyActiveRef.current) return;
       const activeToken = await getSpotifyToken();
       if (activeToken) {
         await reconcileSpotifyData(activeToken);
@@ -299,13 +365,174 @@ function App() {
     }, 20000);
   }, [reconcileSpotifyData, stopPolling]);
 
-  // Manual refresh Spotify trigger
+  // Primary Spotify Synchronization pipeline
+  const syncSpotifyUser = useCallback(async (token: string) => {
+    isSpotifyActiveRef.current = true;
+
+    // Immediately isolate user mode: clear demo presets so no data leakage occurs
+    setPreset('spotify');
+    setRecords([]);
+    setListeningEvents([]);
+    setPlaybackState(null);
+    lastSyncAtRef.current = 0;
+
+    setSpotifyStatus((prev) => ({
+      ...prev,
+      state: 'syncing',
+      lastSyncAt: null,
+      label: 'Spotify · Syncing',
+      errorMessage: undefined,
+    }));
+
+    try {
+      // 1. Identity Verification via /v1/me (never log tokens or credentials)
+      let profile = null;
+      try {
+        profile = await fetchSpotifyUserProfile(token);
+      } catch (err: unknown) {
+        if (err instanceof SpotifyApiError && (err.status === 403 || err.status === 401)) {
+          throw err;
+        }
+        console.warn('Profile fetch non-fatal error:', err);
+      }
+
+      const userId = profile?.id;
+      const userName = profile?.display_name || (userId ? `User: ${userId}` : undefined);
+
+      if (userId || userName) {
+        setSpotifyStatus((prev) => ({
+          ...prev,
+          userId: userId || prev.userId,
+          userName: userName || prev.userName,
+        }));
+      }
+
+      // 2. Fetch user's personal top tracks
+      const fetchedRecords = await fetchSpotifyTopTracks(token);
+
+      if (fetchedRecords.length === 0) {
+        setRecords([]);
+        setSpotifyStatus((prev) => ({
+          ...prev,
+          state: 'empty_library',
+          lastSyncAt: Date.now(),
+          label: 'Spotify · Connected',
+          errorMessage: '0 tracks found for this Spotify account.',
+        }));
+      } else {
+        const db = normalizeMusicRecords(fetchedRecords, 'spotify');
+        setRecords(db.rawRecords);
+        setSpotifyStatus((prev) => ({
+          ...prev,
+          state: 'updated_recently',
+          lastSyncAt: Date.now(),
+          label: 'Spotify · Synced',
+          errorMessage: undefined,
+        }));
+        logSpotifySyncDiagnostic('success', '/v1/me/top/tracks');
+      }
+
+      // 3. Reconcile playback and recent events
+      await reconcileSpotifyData(token);
+
+      // 4. Start polling if sync succeeded
+      if (isSpotifyActiveRef.current) {
+        startPolling();
+      }
+    } catch (err: unknown) {
+      isSpotifyActiveRef.current = false;
+      stopPolling();
+      setRecords([]);
+      setListeningEvents([]);
+      setPlaybackState(null);
+
+      if (err instanceof SpotifyApiError) {
+        if (err.status === 403) {
+          setSpotifyStatus((prev) => ({
+            ...prev,
+            state: 'access_denied',
+            lastSyncAt: null,
+            label: 'Spotify · Access unavailable',
+            errorMessage: "Your Spotify account was authenticated, but Spotify isn't currently allowing this account to access this Development Mode app. Ask the app owner to grant access, or try again later.",
+          }));
+          return;
+        }
+        if (err.status === 401) {
+          setSpotifyStatus((prev) => ({
+            ...prev,
+            state: 'unauthorized',
+            lastSyncAt: null,
+            label: 'Spotify · Reconnect required',
+            errorMessage: 'Spotify session expired. Please reconnect.',
+          }));
+          return;
+        }
+        if (err.status === 429) {
+          setSpotifyStatus((prev) => ({
+            ...prev,
+            state: 'rate_limited',
+            lastSyncAt: null,
+            label: 'Spotify · Rate limited',
+            errorMessage: 'Spotify rate limit exceeded. Please wait a moment and try again.',
+          }));
+          return;
+        }
+        if (err.classification === 'network_error' || err.classification === 'offline') {
+          setSpotifyStatus((prev) => ({
+            ...prev,
+            state: 'offline',
+            lastSyncAt: null,
+            label: 'Spotify · Offline',
+            errorMessage: 'Network connection issue communicating with Spotify.',
+          }));
+          return;
+        }
+      }
+
+      setSpotifyStatus((prev) => ({
+        ...prev,
+        state: 'error',
+        lastSyncAt: null,
+        label: 'Spotify · Sync error',
+        errorMessage: err instanceof Error ? err.message : 'Spotify synchronization failed',
+      }));
+    }
+  }, [reconcileSpotifyData, startPolling, stopPolling]);
+
+  // Manual retry / refresh Spotify triggers
+  const handleRetrySpotifySync = async () => {
+    setIsRefreshingSpotify(true);
+    try {
+      const token = await getSpotifyToken();
+      if (token) {
+        await syncSpotifyUser(token);
+      }
+    } finally {
+      setIsRefreshingSpotify(false);
+    }
+  };
+
+  const handleReconnectSpotify = () => {
+    loginWithSpotify().catch((err) => {
+      console.warn('Spotify reconnect failed:', err);
+    });
+  };
+
   const handleManualSpotifyRefresh = async () => {
     setIsRefreshingSpotify(true);
     try {
       const token = await getSpotifyToken();
       if (token) {
-        await reconcileSpotifyData(token);
+        if (
+          recordsRef.current.length === 0 || 
+          spotifyStatus.state === 'access_denied' || 
+          spotifyStatus.state === 'error' ||
+          spotifyStatus.state === 'empty_library'
+        ) {
+          await syncSpotifyUser(token);
+        } else {
+          await reconcileSpotifyData(token);
+        }
       }
     } finally {
       setIsRefreshingSpotify(false);
@@ -345,6 +572,9 @@ function App() {
         stopPolling();
       } else {
         stopPolling();
+        if (spotifyStatus.state === 'access_denied' || spotifyStatus.state === 'unauthorized') {
+          return;
+        }
         const activeToken = await getSpotifyToken();
         if (isCancelled || !isSpotifyActiveRef.current) return;
         if (activeToken) {
@@ -371,96 +601,13 @@ function App() {
     getSpotifyToken()
       .then(async (token) => {
         if (!token || isCancelled) return;
-
-        isSpotifyActiveRef.current = true;
-
-        // Immediately isolate user mode: clear demo presets so no data leakage occurs
-        setPreset('spotify');
-        setRecords([]);
-        setListeningEvents([]);
-        lastSyncAtRef.current = 0;
-
-        setSpotifyStatus({
+        setSpotifyStatus((prev) => ({
+          ...prev,
           state: 'connecting',
           lastSyncAt: null,
           label: 'Spotify · Connecting',
-        });
-
-        // Identity Verification via /v1/me (never log tokens or credentials)
-        let profile = null;
-        try {
-          profile = await fetchSpotifyUserProfile(token);
-        } catch {
-          // Continue to attempt track fetch even if profile endpoint is restricted
-        }
-
-        const userId = profile?.id;
-        const userName = profile?.display_name || (userId ? `User: ${userId}` : undefined);
-
-        if (!isCancelled) {
-          setSpotifyStatus((prev) => ({
-            ...prev,
-            userId,
-            userName,
-            label: userName ? `Spotify · ${userName}` : 'Spotify · Connected',
-          }));
-        }
-
-        // Fetch user's personal top tracks
-        let fetchedRecords: RawTrackRecord[] = [];
-        let fetchFailed = false;
-        let fetchErrorMessage = '';
-
-        try {
-          fetchedRecords = await fetchSpotifyTopTracks(token);
-        } catch (err: unknown) {
-          fetchFailed = true;
-          fetchErrorMessage = err instanceof Error ? err.message : 'Could not retrieve top tracks';
-          console.warn('Spotify initial top tracks fetch error:', fetchErrorMessage);
-        }
-
-        if (isCancelled) return;
-
-        if (fetchFailed) {
-          // Show error state instead of silently falling back to electronicData
-          setRecords([]);
-          setSpotifyStatus((prev) => ({
-            ...prev,
-            state: 'error',
-            label: 'Spotify · Sync Failed',
-            errorMessage: fetchErrorMessage,
-          }));
-          return;
-        }
-
-        if (fetchedRecords.length === 0) {
-          // Show explicit empty library state instead of demo data
-          setRecords([]);
-          setSpotifyStatus((prev) => ({
-            ...prev,
-            state: 'empty_library',
-            label: 'Spotify · Empty Library',
-            errorMessage: 'No top tracks found for this Spotify account.',
-          }));
-        } else {
-          const db = normalizeMusicRecords(fetchedRecords, 'spotify');
-          setRecords(db.rawRecords);
-          setSpotifyStatus((prev) => ({
-            ...prev,
-            state: 'updated_recently',
-            lastSyncAt: Date.now(),
-            label: userName ? `Spotify · ${userName}` : 'Spotify · Synced',
-          }));
-        }
-
-        // Reconcile current playback and recently played
-        if (!isCancelled) {
-          await reconcileSpotifyData(token);
-        }
-
-        if (!isCancelled && isSpotifyActiveRef.current) {
-          startPolling();
-        }
+        }));
+        await syncSpotifyUser(token);
       })
       .catch((err) => {
         isSpotifyActiveRef.current = false;
@@ -468,7 +615,7 @@ function App() {
         setSpotifyStatus({
           state: 'error',
           lastSyncAt: null,
-          label: 'Spotify · Error',
+          label: 'Spotify · Sync error',
           errorMessage: 'Failed to establish Spotify session',
         });
       });
@@ -479,7 +626,7 @@ function App() {
       document.removeEventListener('visibilitychange', handleVisibilityChange);
       stopPolling();
     };
-  }, [reconcileSpotifyData, startPolling, stopPolling]);
+  }, [reconcileSpotifyData, startPolling, stopPolling, syncSpotifyUser, spotifyStatus.state]);
 
   // Add discovery item into graph
   const handleAddRecommendation = (item: RecommendationItem) => {
@@ -587,9 +734,11 @@ function App() {
             <h1 className="font-serif text-2xl font-bold tracking-tight text-[var(--text-primary)]">
               Your music
             </h1>
-            {summary && (
+            {summary && (preset !== 'spotify' || (spotifyStatus.state !== 'access_denied' && spotifyStatus.state !== 'connecting' && spotifyStatus.state !== 'syncing' && spotifyStatus.state !== 'error' && spotifyStatus.state !== 'unauthorized')) && (
               <span className="text-xs text-[var(--text-tertiary)] font-mono">
-                {summary.totalTracks.toLocaleString()} tracks · {summary.totalArtists.toLocaleString()} artists · {summary.totalGenres.toLocaleString()} stellar systems
+                {spotifyStatus.state === 'empty_library'
+                  ? '0 tracks'
+                  : `${summary.totalTracks.toLocaleString()} tracks · ${summary.totalArtists.toLocaleString()} artists · ${summary.totalGenres.toLocaleString()} stellar systems`}
               </span>
             )}
           </div>
@@ -731,7 +880,7 @@ function App() {
           {/* Explicit Spotify Error or Empty Library State (never silent demo fallback) */}
           {preset === 'spotify' && records.length === 0 && (
             <div className="absolute inset-0 z-40 bg-[var(--bg-primary)]/90 backdrop-blur-md flex flex-col items-center justify-center p-6 text-center">
-              {spotifyStatus.state === 'connecting' ? (
+              {spotifyStatus.state === 'connecting' || spotifyStatus.state === 'syncing' ? (
                 <div className="flex flex-col items-center gap-3">
                   <RefreshCw className="animate-spin text-emerald-400" size={28} />
                   <h3 className="font-serif text-lg font-bold text-[var(--text-primary)]">
@@ -742,20 +891,101 @@ function App() {
                     Fetching top tracks and resolving sonic gravities.
                   </p>
                 </div>
-              ) : spotifyStatus.state === 'error' ? (
+              ) : spotifyStatus.state === 'access_denied' ? (
                 <div className="flex flex-col items-center gap-3 max-w-md">
                   <div className="w-10 h-10 rounded-full bg-rose-500/10 border border-rose-500/20 flex items-center justify-center text-rose-400">
                     <AlertCircle size={22} />
                   </div>
                   <h3 className="font-serif text-xl font-bold text-[var(--text-primary)]">
-                    Spotify Synchronization Failed
+                    Spotify access unavailable
                   </h3>
                   <p className="text-xs text-[var(--text-secondary)] font-sans leading-relaxed">
-                    {spotifyStatus.errorMessage || 'Unable to retrieve your Spotify top tracks. Verify your Spotify account has listening activity or reconnect.'}
+                    Your Spotify account was authenticated, but Spotify isn't currently allowing this account to access this Development Mode app.
+                  </p>
+                  <p className="text-xs text-[var(--text-tertiary)] font-sans">
+                    Ask the app owner to grant access, or try again later.
                   </p>
                   <div className="flex items-center gap-3 mt-2">
                     <button
-                      onClick={handleManualSpotifyRefresh}
+                      onClick={handleRetrySpotifySync}
+                      className="px-4 py-2 rounded-lg bg-[var(--text-primary)] text-[var(--bg-primary)] text-xs font-semibold hover:opacity-90 transition-opacity"
+                    >
+                      Retry Spotify Sync
+                    </button>
+                    <button
+                      onClick={() => handlePresetChange('electronic')}
+                      className="px-4 py-2 rounded-lg bg-[var(--bg-surface)] border border-[var(--border-primary)] text-xs font-medium text-[var(--text-secondary)] hover:text-[var(--text-primary)] transition-colors"
+                    >
+                      Explore Demo Universe
+                    </button>
+                  </div>
+                </div>
+              ) : spotifyStatus.state === 'unauthorized' ? (
+                <div className="flex flex-col items-center gap-3 max-w-md">
+                  <div className="w-10 h-10 rounded-full bg-rose-500/10 border border-rose-500/20 flex items-center justify-center text-rose-400">
+                    <AlertCircle size={22} />
+                  </div>
+                  <h3 className="font-serif text-xl font-bold text-[var(--text-primary)]">
+                    Spotify Reconnect Required
+                  </h3>
+                  <p className="text-xs text-[var(--text-secondary)] font-sans leading-relaxed">
+                    Your Spotify session has expired or requires re-authentication.
+                  </p>
+                  <div className="flex items-center gap-3 mt-2">
+                    <button
+                      onClick={handleReconnectSpotify}
+                      className="px-4 py-2 rounded-lg bg-[var(--text-primary)] text-[var(--bg-primary)] text-xs font-semibold hover:opacity-90 transition-opacity"
+                    >
+                      Reconnect Spotify
+                    </button>
+                    <button
+                      onClick={() => handlePresetChange('electronic')}
+                      className="px-4 py-2 rounded-lg bg-[var(--bg-surface)] border border-[var(--border-primary)] text-xs font-medium text-[var(--text-secondary)] hover:text-[var(--text-primary)] transition-colors"
+                    >
+                      Explore Demo Universe
+                    </button>
+                  </div>
+                </div>
+              ) : spotifyStatus.state === 'rate_limited' ? (
+                <div className="flex flex-col items-center gap-3 max-w-md">
+                  <div className="w-10 h-10 rounded-full bg-amber-500/10 border border-amber-500/20 flex items-center justify-center text-amber-400">
+                    <AlertCircle size={22} />
+                  </div>
+                  <h3 className="font-serif text-xl font-bold text-[var(--text-primary)]">
+                    Spotify Rate Limited
+                  </h3>
+                  <p className="text-xs text-[var(--text-secondary)] font-sans leading-relaxed">
+                    Spotify rate limit reached. Please wait a moment before trying again.
+                  </p>
+                  <div className="flex items-center gap-3 mt-2">
+                    <button
+                      onClick={handleRetrySpotifySync}
+                      className="px-4 py-2 rounded-lg bg-[var(--text-primary)] text-[var(--bg-primary)] text-xs font-semibold hover:opacity-90 transition-opacity"
+                    >
+                      Retry Spotify Sync
+                    </button>
+                    <button
+                      onClick={() => handlePresetChange('electronic')}
+                      className="px-4 py-2 rounded-lg bg-[var(--bg-surface)] border border-[var(--border-primary)] text-xs font-medium text-[var(--text-secondary)] hover:text-[var(--text-primary)] transition-colors"
+                    >
+                      Explore Demo Universe
+                    </button>
+                  </div>
+                </div>
+              ) : spotifyStatus.state === 'offline' || spotifyStatus.state === 'network_error' ? (
+                <div className="flex flex-col items-center gap-3 max-w-md">
+                  <div className="w-10 h-10 rounded-full bg-rose-500/10 border border-rose-500/20 flex items-center justify-center text-rose-400">
+                    <AlertCircle size={22} />
+                  </div>
+                  <h3 className="font-serif text-xl font-bold text-[var(--text-primary)]">
+                    Spotify Connection Offline
+                  </h3>
+                  <p className="text-xs text-[var(--text-secondary)] font-sans leading-relaxed">
+                    Network connectivity issue communicating with Spotify.
+                  </p>
+                  <div className="flex items-center gap-3 mt-2">
+                    <button
+                      onClick={handleRetrySpotifySync}
                       className="px-4 py-2 rounded-lg bg-[var(--text-primary)] text-[var(--bg-primary)] text-xs font-semibold hover:opacity-90 transition-opacity"
                     >
                       Retry Spotify Sync
@@ -774,14 +1004,17 @@ function App() {
                     <Orbit size={22} />
                   </div>
                   <h3 className="font-serif text-xl font-bold text-[var(--text-primary)]">
-                    No Personal Spotify History Found
+                    Spotify connected
                   </h3>
+                  <p className="text-xs text-[var(--text-secondary)] font-mono">
+                    0 tracks
+                  </p>
                   <p className="text-xs text-[var(--text-secondary)] font-sans leading-relaxed">
-                    Spotify returned no top tracks for this account yet. Play a few songs on Spotify or explore our curated presets.
+                    No top tracks found for this account yet. Play music on Spotify to populate your universe or explore our curated presets.
                   </p>
                   <div className="flex items-center gap-3 mt-2">
                     <button
-                      onClick={handleManualSpotifyRefresh}
+                      onClick={handleRetrySpotifySync}
                       className="px-4 py-2 rounded-lg bg-[var(--text-primary)] text-[var(--bg-primary)] text-xs font-semibold hover:opacity-90 transition-opacity"
                     >
                       Check Again
@@ -791,6 +1024,32 @@ function App() {
                       className="px-4 py-2 rounded-lg bg-[var(--bg-surface)] border border-[var(--border-primary)] text-xs font-medium text-[var(--text-secondary)] hover:text-[var(--text-primary)] transition-colors"
                     >
                       Load Demo Universe
+                    </button>
+                  </div>
+                </div>
+              ) : spotifyStatus.state === 'error' ? (
+                <div className="flex flex-col items-center gap-3 max-w-md">
+                  <div className="w-10 h-10 rounded-full bg-rose-500/10 border border-rose-500/20 flex items-center justify-center text-rose-400">
+                    <AlertCircle size={22} />
+                  </div>
+                  <h3 className="font-serif text-xl font-bold text-[var(--text-primary)]">
+                    Spotify Synchronization Failed
+                  </h3>
+                  <p className="text-xs text-[var(--text-secondary)] font-sans leading-relaxed">
+                    {spotifyStatus.errorMessage || 'Unable to retrieve your Spotify top tracks. Verify your Spotify account has listening activity or reconnect.'}
+                  </p>
+                  <div className="flex items-center gap-3 mt-2">
+                    <button
+                      onClick={handleRetrySpotifySync}
+                      className="px-4 py-2 rounded-lg bg-[var(--text-primary)] text-[var(--bg-primary)] text-xs font-semibold hover:opacity-90 transition-opacity"
+                    >
+                      Retry Spotify Sync
+                    </button>
+                    <button
+                      onClick={() => handlePresetChange('electronic')}
+                      className="px-4 py-2 rounded-lg bg-[var(--bg-surface)] border border-[var(--border-primary)] text-xs font-medium text-[var(--text-secondary)] hover:text-[var(--text-primary)] transition-colors"
+                    >
+                      Explore Demo Universe
                     </button>
                   </div>
                 </div>

@@ -70,11 +70,13 @@ export const TopNavigation: React.FC<TopNavigationProps> = ({
               className={`w-1.5 h-1.5 rounded-full ${
                 isLive
                   ? 'bg-emerald-400 animate-pulse'
-                  : spotifyStatus.state === 'rate_limited'
-                  ? 'bg-amber-400'
-                  : spotifyStatus.state === 'error' || spotifyStatus.state === 'offline'
+                  : spotifyStatus.state === 'connecting' || spotifyStatus.state === 'syncing'
+                  ? 'bg-blue-400 animate-pulse'
+                  : spotifyStatus.state === 'access_denied'
                   ? 'bg-rose-400'
-                  : spotifyStatus.state === 'empty_library'
+                  : spotifyStatus.state === 'unauthorized' || spotifyStatus.state === 'error' || spotifyStatus.state === 'offline' || spotifyStatus.state === 'network_error'
+                  ? 'bg-rose-400'
+                  : spotifyStatus.state === 'rate_limited' || spotifyStatus.state === 'empty_library'
                   ? 'bg-amber-400'
                   : 'bg-emerald-500/60'
               }`}
@@ -90,7 +92,25 @@ export const TopNavigation: React.FC<TopNavigationProps> = ({
               ) : null}
             </span>
             <span className="sm:hidden">
-              {isLive ? 'Live' : spotifyStatus.state === 'error' ? 'Error' : 'Synced'}
+              {isLive
+                ? 'Live'
+                : spotifyStatus.state === 'access_denied'
+                ? 'Access unavailable'
+                : spotifyStatus.state === 'unauthorized'
+                ? 'Reconnect'
+                : spotifyStatus.state === 'connecting'
+                ? 'Connecting'
+                : spotifyStatus.state === 'syncing'
+                ? 'Syncing'
+                : spotifyStatus.state === 'rate_limited'
+                ? 'Rate limited'
+                : spotifyStatus.state === 'offline' || spotifyStatus.state === 'network_error'
+                ? 'Offline'
+                : spotifyStatus.state === 'error'
+                ? 'Error'
+                : spotifyStatus.state === 'empty_library'
+                ? 'Connected'
+                : 'Synced'}
             </span>
 
             {onManualSpotifyRefresh && (
@@ -182,10 +202,12 @@ export const TopNavigation: React.FC<TopNavigationProps> = ({
           </button>
         ) : (
           <div className="flex items-center gap-2">
-            <div className="hidden lg:flex items-center gap-1 text-[11px] text-[var(--text-tertiary)] font-mono pl-1">
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
-              <span>Spotify Live</span>
-            </div>
+            {isLive ? (
+              <div className="hidden lg:flex items-center gap-1 text-[11px] text-[var(--text-tertiary)] font-mono pl-1">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                <span>Spotify Live</span>
+              </div>
+            ) : null}
             {onDisconnectSpotify && (
               <button
                 onClick={onDisconnectSpotify}

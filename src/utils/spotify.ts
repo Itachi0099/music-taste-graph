@@ -8,18 +8,21 @@ import type {
   SpotifyTokenEndpointResponse,
   SpotifyUserProfile,
 } from '../types/spotify';
+import { SpotifyApiError, logSpotifySyncDiagnostic, sanitizeEndpoint } from './spotifyError';
+
+export { SpotifyApiError, classifySpotifyStatus, getSpotifyStatusLabel, logSpotifySyncDiagnostic } from './spotifyError';
 
 const DEFAULT_CLIENT_ID = '663e5f2a2950473ba037426e5343b8df';
-const CLIENT_ID = import.meta.env.VITE_SPOTIFY_CLIENT_ID || DEFAULT_CLIENT_ID;
+const CLIENT_ID = import.meta.env?.VITE_SPOTIFY_CLIENT_ID || DEFAULT_CLIENT_ID;
 
 export const SPOTIFY_REDIRECT_URI =
-  import.meta.env.VITE_SPOTIFY_REDIRECT_URI ||
-  (import.meta.env.PROD
+  import.meta.env?.VITE_SPOTIFY_REDIRECT_URI ||
+  (import.meta.env?.PROD
     ? 'https://music-taste-graph.vercel.app/'
     : 'http://127.0.0.1:5173/');
 
 export const getRedirectUri = (): string => {
-  if (import.meta.env.VITE_SPOTIFY_REDIRECT_URI) {
+  if (import.meta.env?.VITE_SPOTIFY_REDIRECT_URI) {
     return import.meta.env.VITE_SPOTIFY_REDIRECT_URI;
   }
   if (typeof window !== 'undefined' && window.location) {
@@ -130,6 +133,7 @@ export const saveTokens = (accessToken: string, expiresInSeconds: number = 3600)
 export const clearTokens = () => {
   inMemoryAccessToken = null;
   tokenExpiresAt = 0;
+  resetSpotifyRateLimitState();
 
   if (typeof window !== 'undefined') {
     try {
@@ -305,12 +309,17 @@ export const getAccessTokenFromUrl = getSpotifyToken;
 let rateLimitResetTime = 0;
 let consecutiveAuthFailures = 0;
 
+export const resetSpotifyRateLimitState = () => {
+  rateLimitResetTime = 0;
+  consecutiveAuthFailures = 0;
+};
+
 // Dev-safe request instrumentation (timestamps and request sequence numbers, NEVER logging tokens)
 let requestSeq = 0;
 function logSpotifyRequest(endpoint: string) {
   requestSeq++;
   const timestamp = new Date().toISOString();
-  console.log(`[SpotifySync #${requestSeq}] [${timestamp}] Request: ${endpoint}`);
+  console.log(`[SpotifySync #${requestSeq}] [${timestamp}] Request: ${sanitizeEndpoint(endpoint)}`);
 }
 
 async function fetchWithTimeout(url: string, options: RequestInit = {}, timeoutMs = 8000): Promise<Response> {
@@ -328,18 +337,18 @@ async function fetchWithTimeout(url: string, options: RequestInit = {}, timeoutM
 }
 
 // Helper to make authenticated requests with bounded 401 retry & 429 backoff
-async function spotifyFetch(url: string, token: string, timeoutMs = 8000): Promise<Response> {
+export async function spotifyFetch(url: string, token: string, timeoutMs = 8000): Promise<Response> {
+  const endpointPath = sanitizeEndpoint(url);
   const now = Date.now();
   if (now < rateLimitResetTime) {
     const waitSec = Math.ceil((rateLimitResetTime - now) / 1000);
+    logSpotifySyncDiagnostic('429', endpointPath, `${waitSec}s active cooldown`);
     return new Response(JSON.stringify({ error: 'Rate limit active', retryAfter: waitSec }), {
       status: 429,
       headers: { 'Retry-After': String(waitSec) },
     });
   }
 
-  // Strip query params or tokens from log path to ensure no credentials or tokens are logged
-  const endpointPath = url.split('?')[0];
   logSpotifyRequest(endpointPath);
 
   let activeToken = token;
@@ -349,10 +358,9 @@ async function spotifyFetch(url: string, token: string, timeoutMs = 8000): Promi
       headers: { Authorization: `Bearer ${activeToken}` },
     }, timeoutMs);
   } catch (err: unknown) {
-    if (err instanceof Error && err.name === 'AbortError') {
-      throw new Error(`Spotify request timed out for ${endpointPath}`);
-    }
-    throw err;
+    const errMessage = err instanceof Error ? err.message : String(err);
+    logSpotifySyncDiagnostic('network', endpointPath, errMessage);
+    throw new SpotifyApiError(0, endpointPath, errMessage);
   }
 
   // Handle 401 Unauthorized -> Refresh token
@@ -369,15 +377,22 @@ async function spotifyFetch(url: string, token: string, timeoutMs = 8000): Promi
             headers: { Authorization: `Bearer ${activeToken}` },
           }, timeoutMs);
         } catch (err: unknown) {
-          if (err instanceof Error && err.name === 'AbortError') {
-            throw new Error(`Spotify request timed out on retry for ${endpointPath}`);
-          }
-          throw err;
+          const errMessage = err instanceof Error ? err.message : String(err);
+          logSpotifySyncDiagnostic('network', endpointPath, errMessage);
+          throw new SpotifyApiError(0, endpointPath, errMessage);
         }
       }
     }
+    if (res.status === 401) {
+      logSpotifySyncDiagnostic('401', endpointPath);
+    }
   } else {
     consecutiveAuthFailures = 0;
+  }
+
+  // Handle 403 Access Denied
+  if (res.status === 403) {
+    logSpotifySyncDiagnostic('403', endpointPath);
   }
 
   // Handle 429 Rate Limit
@@ -387,7 +402,12 @@ async function spotifyFetch(url: string, token: string, timeoutMs = 8000): Promi
       ? Math.min(Math.max(parseInt(retryAfterHeader, 10), 1), 300)
       : 5;
     rateLimitResetTime = Date.now() + retryAfterSec * 1000;
-    console.warn(`Spotify rate limit reached (429). Bounded backoff for ${retryAfterSec}s.`);
+    logSpotifySyncDiagnostic('429', endpointPath, `${retryAfterSec}s backoff`);
+  }
+
+  // Handle 5xx Server Failure
+  if (res.status >= 500 && res.status < 600) {
+    logSpotifySyncDiagnostic('5xx', endpointPath, `status ${res.status}`);
   }
 
   return res;
@@ -486,78 +506,70 @@ async function resolveArtistGenres(artistNames: string[], knownGenreMap: Record<
  * Note: Never log access tokens, refresh tokens, cookies, or user credentials.
  */
 export const fetchSpotifyUserProfile = async (token: string): Promise<SpotifyUserProfile | null> => {
-  try {
-    const res = await spotifyFetch('https://api.spotify.com/v1/me', token);
-    if (!res.ok) {
-      return null;
-    }
-    const data: SpotifyUserProfile = await res.json();
-    return {
-      id: data.id,
-      display_name: data.display_name || null,
-      email: data.email,
-      product: data.product,
-      country: data.country,
-    };
-  } catch (err) {
-    console.warn('Failed to fetch Spotify user profile:', err instanceof Error ? err.message : String(err));
-    return null;
+  const res = await spotifyFetch('https://api.spotify.com/v1/me', token);
+  if (!res.ok) {
+    throw new SpotifyApiError(res.status, '/v1/me');
   }
+  const data: SpotifyUserProfile = await res.json();
+  return {
+    id: data.id,
+    display_name: data.display_name || null,
+    email: data.email,
+    product: data.product,
+    country: data.country,
+  };
 };
 
 /**
  * Fetches user's current Spotify playback state
  */
 export const fetchCurrentlyPlaying = async (token: string): Promise<SpotifyPlaybackState | null> => {
-  try {
-    const res = await spotifyFetch('https://api.spotify.com/v1/me/player/currently-playing', token);
-    if (res.status === 204 || res.status === 404) {
-      return {
-        isPlaying: false,
-        trackId: null,
-        trackTitle: null,
-        artistName: null,
-        genre: null,
-        progressMs: 0,
-        durationMs: 0,
-        lastPolledAt: Date.now(),
-      };
-    }
-
-    if (!res.ok) return null;
-    const data: SpotifyCurrentlyPlayingPayload = await res.json();
-    if (!data || !data.item) {
-      return {
-        isPlaying: false,
-        trackId: null,
-        trackTitle: null,
-        artistName: null,
-        genre: null,
-        progressMs: 0,
-        durationMs: 0,
-        lastPolledAt: Date.now(),
-      };
-    }
-
-    const item = data.item;
-    const artistName = item.artists?.[0]?.name || 'Unknown Artist';
-
+  const res = await spotifyFetch('https://api.spotify.com/v1/me/player/currently-playing', token);
+  if (res.status === 204 || res.status === 404) {
     return {
-      isPlaying: Boolean(data.is_playing),
-      trackId: item.id || `spotify-${item.name}`,
-      trackTitle: item.name,
-      artistName,
+      isPlaying: false,
+      trackId: null,
+      trackTitle: null,
+      artistName: null,
       genre: null,
-      progressMs: data.progress_ms || 0,
-      durationMs: item.duration_ms || 0,
-      albumArt: item.album?.images?.[0]?.url,
-      spotifyUrl: item.external_urls?.spotify,
+      progressMs: 0,
+      durationMs: 0,
       lastPolledAt: Date.now(),
     };
-  } catch (err) {
-    console.warn('Error fetching currently playing track:', err);
-    return null;
   }
+
+  if (!res.ok) {
+    throw new SpotifyApiError(res.status, '/v1/me/player/currently-playing');
+  }
+  const data: SpotifyCurrentlyPlayingPayload = await res.json();
+  if (!data || !data.item) {
+    return {
+      isPlaying: false,
+      trackId: null,
+      trackTitle: null,
+      artistName: null,
+      genre: null,
+      progressMs: 0,
+      durationMs: 0,
+      lastPolledAt: Date.now(),
+    };
+  }
+
+  const item = data.item;
+  const artistName = item.artists?.[0]?.name || 'Unknown Artist';
+
+  return {
+    isPlaying: Boolean(data.is_playing),
+    trackId: item.id || `spotify-${item.name}`,
+    trackTitle: item.name,
+    artistName,
+    genre: null,
+    progressMs: data.progress_ms || 0,
+    durationMs: item.duration_ms || 0,
+    albumArt: item.album?.images?.[0]?.url,
+    spotifyUrl: item.external_urls?.spotify,
+    lastPolledAt: Date.now(),
+  };
 };
 
 /**
@@ -567,45 +579,42 @@ export const fetchRecentlyPlayedEvents = async (
   token: string,
   afterTimestamp?: number
 ): Promise<ListeningEvent[]> => {
-  try {
-    let url = 'https://api.spotify.com/v1/me/player/recently-played?limit=30';
-    if (afterTimestamp && afterTimestamp > 0) {
-      url += `&after=${afterTimestamp}`;
-    }
-
-    const res = await spotifyFetch(url, token);
-    if (!res.ok) return [];
-
-    const data: SpotifyRecentlyPlayedPayload = await res.json();
-    if (!data.items || !Array.isArray(data.items)) return [];
-
-    const artistNames = data.items
-      .map((item) => item.track?.artists?.[0]?.name)
-      .filter((name): name is string => Boolean(name));
-    const genreMap = await resolveArtistGenres([...new Set(artistNames)], {});
-
-    return data.items.map((item) => {
-      const track: SpotifyTrackItem = item.track;
-      const artist = track?.artists?.[0]?.name || 'Unknown Artist';
-      const playedAt = item.played_at || new Date().toISOString();
-      const genre = genreMap[artist] || 'Unknown'; // R-04: Do not default unknown artists to Electronic
-
-      return {
-        id: `${track.id || track.name}_${playedAt}`,
-        trackId: track.id || `track-${track.name}`,
-        trackTitle: track.name,
-        artistName: artist,
-        genre,
-        playedAt,
-        durationMs: track.duration_ms,
-        source: 'spotify_recent',
-        bpm: null,
-      };
-    });
-  } catch (err) {
-    console.warn('Error fetching recently played tracks:', err);
-    return [];
+  let url = 'https://api.spotify.com/v1/me/player/recently-played?limit=30';
+  if (afterTimestamp && afterTimestamp > 0) {
+    url += `&after=${afterTimestamp}`;
   }
+
+  const res = await spotifyFetch(url, token);
+  if (!res.ok) {
+    throw new SpotifyApiError(res.status, '/v1/me/player/recently-played');
+  }
+
+  const data: SpotifyRecentlyPlayedPayload = await res.json();
+  if (!data.items || !Array.isArray(data.items)) return [];
+
+  const artistNames = data.items
+    .map((item) => item.track?.artists?.[0]?.name)
+    .filter((name): name is string => Boolean(name));
+  const genreMap = await resolveArtistGenres([...new Set(artistNames)], {});
+
+  return data.items.map((item) => {
+    const track: SpotifyTrackItem = item.track;
+    const artist = track?.artists?.[0]?.name || 'Unknown Artist';
+    const playedAt = item.played_at || new Date().toISOString();
+    const genre = genreMap[artist] || 'Unknown'; // R-04: Do not default unknown artists to Electronic
+
+    return {
+      id: `${track.id || track.name}_${playedAt}`,
+      trackId: track.id || `track-${track.name}`,
+      trackTitle: track.name,
+      artistName: artist,
+      genre,
+      playedAt,
+      durationMs: track.duration_ms,
+      source: 'spotify_recent',
+      bpm: null,
+    };
+  });
 };
 
 /**
@@ -613,7 +622,7 @@ export const fetchRecentlyPlayedEvents = async (
  */
 export const fetchSpotifyTopTracks = async (token: string): Promise<RawTrackRecord[]> => {
   const response = await spotifyFetch('https://api.spotify.com/v1/me/top/tracks?limit=35&time_range=medium_term', token);
-  if (!response.ok) throw new Error('Failed to fetch Spotify tracks');
+  if (!response.ok) throw new SpotifyApiError(response.status, '/v1/me/top/tracks');
   const data: SpotifyTopTracksPayload = await response.json();
 
   let genreMap: Record<string, string> = {};

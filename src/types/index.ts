@@ -111,10 +111,15 @@ export interface SpotifyPlaybackState {
 export type SpotifyConnectionState = 
   | 'disconnected'
   | 'connecting'
+  | 'syncing'
   | 'live'
   | 'updated_recently'
+  | 'synced'
   | 'reconnecting'
+  | 'access_denied'
+  | 'unauthorized'
   | 'rate_limited'
+  | 'network_error'
   | 'offline'
   | 'error'
   | 'empty_library';

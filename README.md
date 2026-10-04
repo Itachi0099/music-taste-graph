@@ -53,6 +53,27 @@ An interactive, high-performance deep-space visualization of personal music tast
 
 ---
 
+## 🔒 Spotify Integration, Development Mode & Data Isolation
+
+### Spotify Development Mode Limitation
+SymphonyGraph connects to the Spotify Web API using PKCE OAuth. Because the application is currently registered in **Spotify Development Mode**:
+- Spotify Developer policies restrict API access exclusively to Spotify accounts explicitly registered on the application's Developer Dashboard allowlist (Spotify's quota limit of 25 users).
+- **Non-allowlisted accounts:** Spotify allows users to complete OAuth login, but immediately responds with `HTTP 403 Forbidden` on subsequent authenticated API requests (`/v1/me`, `/v1/me/top/tracks`, player status, and recently played tracks).
+- **Application UX:** SymphonyGraph explicitly classifies HTTP 403 responses as `access_denied` ("Spotify access unavailable"), halts all background polling to avoid rate-limiting or wasteful requests, and renders an informative status message. It does **not** falsely present a failed sync as "Synced" or as an empty library.
+
+### Public Demo & Exploration Options
+Visitors who are not on the Spotify Developer allowlist can fully explore the platform through:
+1. **Curated Presets:** Instant access to pre-compiled celestial universes (*Electronic & Club*, *Indie & Alternative*, and *Eclectic Mix*).
+2. **Local Metadata Import:** Drag-and-drop your personal listening history via CSV or JSON files (supports track, artist, genre, and tempo mapping).
+3. **Allowlist Requests:** Reach out to the project maintainer to have your Spotify account email added to the developer allowlist.
+
+### Strict User Data Isolation
+- **No Silent Fallbacks:** If a Spotify API request fails or is denied with HTTP 403, SymphonyGraph **never** falls back silently to bundled electronic/demo data. The view remains completely clean and isolated.
+- **Multi-User Isolation:** Disconnecting a session purges all cached user tracks, listening events, playback states, and identity markers from memory. Switching accounts guarantees that no residual data from User A leaks into User B.
+- **Zero Token Logging:** Access tokens, refresh tokens, PKCE code verifiers, client secrets, and `Authorization` headers are never logged to client or server output. Diagnostic instrumentation only records sanitized endpoint paths and HTTP status codes.
+
+---
+
 ## 🛠️ Tech Stack
 
 - **Frontend:** React 19, TypeScript, Vite, Tailwind CSS
@@ -100,6 +121,8 @@ An interactive, high-performance deep-space visualization of personal music tast
 
 - `npm run dev`: Starts the Vite client development server.
 - `npm run build`: Compiles TypeScript and builds the production client with Vite.
+- `npm test`: Runs the automated test suite (16 unit and regression tests for Spotify error classification, 403 handling, and isolation).
+- `npm run lint`: Runs Oxlint across all TypeScript and React source files.
 - `npm run server`: Runs the local Express server for Spotify authentication endpoints.
 - `npm run dev:all`: Starts both backend server and Vite client concurrently.
 - `npm run preview`: Locally previews the production build.
