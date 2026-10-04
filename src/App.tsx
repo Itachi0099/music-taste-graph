@@ -28,6 +28,8 @@ import {
   clearTokens,
   SpotifyApiError,
   logSpotifySyncDiagnostic,
+  isSpotifyRateLimited,
+  getSpotifyRateLimitRemainingMs,
 } from './utils/spotify';
 import { normalizeMusicRecords, ingestListeningEvents } from './utils/normalizer';
 import type { 
@@ -215,9 +217,18 @@ function App() {
     }
   };
 
-  const isReconcilingRef = useRef(false);
+  const isSyncingRef = useRef<boolean>(false);
+  const isReconcilingRef = useRef<boolean>(false);
   const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const isSpotifyActiveRef = useRef<boolean>(false);
+  const lastPlayingTrackIdRef = useRef<string | null>(null);
+  const lastRecentPlayedPollTimeRef = useRef<number>(0);
+  const lastVisibilityReconcileTimeRef = useRef<number>(0);
+  const spotifyStatusRef = useRef(spotifyStatus);
+  useEffect(() => {
+    spotifyStatusRef.current = spotifyStatus;
+  }, [spotifyStatus]);
+  const hasInitializedRef = useRef<boolean>(false);
 
   // Stop polling interval cleanly
   const stopPolling = useCallback(() => {
@@ -227,9 +238,9 @@ function App() {
     }
   }, []);
 
-  // Reconcile Spotify events incrementally with overlap protection (R-03)
-  const reconcileSpotifyData = useCallback(async (token: string) => {
-    if (isReconcilingRef.current) return;
+  // Reconcile Spotify events incrementally with overlap and rate-limit protection (R-03)
+  const reconcileSpotifyData = useCallback(async (token: string, forceRecent = false) => {
+    if (isReconcilingRef.current || (isSyncingRef.current && !forceRecent) || isSpotifyRateLimited()) return;
     isReconcilingRef.current = true;
     try {
       // 1. Fetch currently playing
@@ -238,29 +249,40 @@ function App() {
         setPlaybackState(current);
       }
 
-      // 2. Fetch recently played events incrementally
-      const afterTs = lastSyncAtRef.current > 0 ? lastSyncAtRef.current : undefined;
-      const recentEvents = await fetchRecentlyPlayedEvents(token, afterTs);
+      // 2. Fetch recently played events conditionally:
+      // - on forced initial sync
+      // - on detected track change
+      // - or every 120s cadence
+      const now = Date.now();
+      const trackChanged = current?.trackId && current.trackId !== lastPlayingTrackIdRef.current;
+      const shouldFetchRecent = forceRecent || trackChanged || (now - lastRecentPlayedPollTimeRef.current >= 120000);
 
-      if (recentEvents.length > 0) {
-        const now = Date.now();
-        lastSyncAtRef.current = now;
+      if (shouldFetchRecent) {
+        const afterTs = lastSyncAtRef.current > 0 ? lastSyncAtRef.current : undefined;
+        const recentEvents = await fetchRecentlyPlayedEvents(token, afterTs);
+        lastRecentPlayedPollTimeRef.current = now;
 
-        const currentDb = normalizeMusicRecords(recordsRef.current, 'spotify');
-        const { db, addedEvents } = ingestListeningEvents(
-          { ...currentDb, listeningEvents: listeningEventsRef.current },
-          recentEvents
-        );
+        if (recentEvents.length > 0) {
+          lastSyncAtRef.current = now;
 
-        if (addedEvents.length > 0) {
-          setRecords(db.rawRecords);
-          setListeningEvents(db.listeningEvents);
+          const currentDb = normalizeMusicRecords(recordsRef.current, 'spotify');
+          const { db, addedEvents } = ingestListeningEvents(
+            { ...currentDb, listeningEvents: listeningEventsRef.current },
+            recentEvents
+          );
+
+          if (addedEvents.length > 0) {
+            setRecords(db.rawRecords);
+            setListeningEvents(db.listeningEvents);
+          }
         }
       }
 
-      // 3. Update status safely without overwriting error/access_denied states
+      lastPlayingTrackIdRef.current = current?.trackId || null;
+
+      // 3. Update status safely without overwriting error/access_denied/rate_limited states
       setSpotifyStatus((prev) => {
-        if (prev.state === 'access_denied' || prev.state === 'unauthorized') {
+        if (prev.state === 'access_denied' || prev.state === 'unauthorized' || prev.state === 'rate_limited') {
           return prev;
         }
 
@@ -316,10 +338,15 @@ function App() {
           return;
         }
         if (err.status === 429) {
+          stopPolling();
           setSpotifyStatus((prev) => ({
             ...prev,
             state: 'rate_limited',
+            isQuotaExceeded: err.isQuotaExceeded,
             label: 'Spotify · Rate limited',
+            errorMessage: err.isQuotaExceeded
+              ? 'Spotify API daily/monthly quota exceeded for this application. Please try again later.'
+              : 'Spotify rolling rate limit reached. Please wait a moment before trying again.',
           }));
           return;
         }
@@ -338,17 +365,17 @@ function App() {
     }
   }, [stopPolling]);
 
-  // Setup background polling (every 20s while tab is visible and active)
+  // Setup background polling (every 20s while tab is visible, active, and not in 429 cooldown)
   const startPolling = useCallback(() => {
     // Clear any existing interval to guarantee at most ONE active interval
     if (pollIntervalRef.current) {
       clearInterval(pollIntervalRef.current);
       pollIntervalRef.current = null;
     }
-    if (document.hidden || !isSpotifyActiveRef.current) return;
+    if (document.hidden || !isSpotifyActiveRef.current || isSpotifyRateLimited()) return;
 
     pollIntervalRef.current = setInterval(async () => {
-      if (document.hidden || !isSpotifyActiveRef.current) return;
+      if (document.hidden || !isSpotifyActiveRef.current || isSpotifyRateLimited()) return;
       const activeToken = await getSpotifyToken();
       if (activeToken) {
         await reconcileSpotifyData(activeToken);
@@ -365,8 +392,18 @@ function App() {
     }, 20000);
   }, [reconcileSpotifyData, stopPolling]);
 
-  // Primary Spotify Synchronization pipeline
-  const syncSpotifyUser = useCallback(async (token: string) => {
+  // Primary Spotify Synchronization pipeline with single-flight guard
+  const syncSpotifyUser = useCallback(async (token: string, force = false) => {
+    if (isSyncingRef.current) return;
+    if (isSpotifyRateLimited()) {
+      setSpotifyStatus((prev) => ({
+        ...prev,
+        state: 'rate_limited',
+        label: 'Spotify · Rate limited',
+      }));
+      return;
+    }
+    isSyncingRef.current = true;
     isSpotifyActiveRef.current = true;
 
     // Immediately isolate user mode: clear demo presets so no data leakage occurs
@@ -388,9 +425,9 @@ function App() {
       // 1. Identity Verification via /v1/me (never log tokens or credentials)
       let profile = null;
       try {
-        profile = await fetchSpotifyUserProfile(token);
+        profile = await fetchSpotifyUserProfile(token, force);
       } catch (err: unknown) {
-        if (err instanceof SpotifyApiError && (err.status === 403 || err.status === 401)) {
+        if (err instanceof SpotifyApiError && (err.status === 403 || err.status === 401 || err.status === 429)) {
           throw err;
         }
         console.warn('Profile fetch non-fatal error:', err);
@@ -407,8 +444,8 @@ function App() {
         }));
       }
 
-      // 2. Fetch user's personal top tracks
-      const fetchedRecords = await fetchSpotifyTopTracks(token);
+      // 2. Fetch user's personal top tracks (uses cache if available unless forced)
+      const fetchedRecords = await fetchSpotifyTopTracks(token, force);
 
       if (fetchedRecords.length === 0) {
         setRecords([]);
@@ -432,11 +469,11 @@ function App() {
         logSpotifySyncDiagnostic('success', '/v1/me/top/tracks');
       }
 
-      // 3. Reconcile playback and recent events
-      await reconcileSpotifyData(token);
+      // 3. Reconcile playback and recent events (forceRecent = true for initial connect)
+      await reconcileSpotifyData(token, true);
 
-      // 4. Start polling if sync succeeded
-      if (isSpotifyActiveRef.current) {
+      // 4. Start polling if sync succeeded and not in cooldown
+      if (isSpotifyActiveRef.current && !isSpotifyRateLimited()) {
         startPolling();
       }
     } catch (err: unknown) {
@@ -471,9 +508,12 @@ function App() {
           setSpotifyStatus((prev) => ({
             ...prev,
             state: 'rate_limited',
+            isQuotaExceeded: err.isQuotaExceeded,
             lastSyncAt: null,
             label: 'Spotify · Rate limited',
-            errorMessage: 'Spotify rate limit exceeded. Please wait a moment and try again.',
+            errorMessage: err.isQuotaExceeded
+              ? 'Spotify API daily/monthly quota exceeded for this application. Please try again later.'
+              : 'Spotify rate limit exceeded. Please wait a moment and try again.',
           }));
           return;
         }
@@ -496,16 +536,19 @@ function App() {
         label: 'Spotify · Sync error',
         errorMessage: err instanceof Error ? err.message : 'Spotify synchronization failed',
       }));
+    } finally {
+      isSyncingRef.current = false;
     }
   }, [reconcileSpotifyData, startPolling, stopPolling]);
 
-  // Manual retry / refresh Spotify triggers
+  // Manual retry / refresh Spotify triggers with rate-limit and single-flight guards
   const handleRetrySpotifySync = async () => {
+    if (isSpotifyRateLimited() || isSyncingRef.current) return;
     setIsRefreshingSpotify(true);
     try {
       const token = await getSpotifyToken();
       if (token) {
-        await syncSpotifyUser(token);
+        await syncSpotifyUser(token, true);
       }
     } finally {
       setIsRefreshingSpotify(false);
@@ -519,17 +562,18 @@ function App() {
   };
 
   const handleManualSpotifyRefresh = async () => {
+    if (isSpotifyRateLimited() || isSyncingRef.current || isReconcilingRef.current) return;
     setIsRefreshingSpotify(true);
     try {
       const token = await getSpotifyToken();
       if (token) {
         if (
           recordsRef.current.length === 0 || 
-          spotifyStatus.state === 'access_denied' || 
-          spotifyStatus.state === 'error' ||
-          spotifyStatus.state === 'empty_library'
+          spotifyStatusRef.current.state === 'access_denied' || 
+          spotifyStatusRef.current.state === 'error' ||
+          spotifyStatusRef.current.state === 'empty_library'
         ) {
-          await syncSpotifyUser(token);
+          await syncSpotifyUser(token, true);
         } else {
           await reconcileSpotifyData(token);
         }
@@ -545,6 +589,8 @@ function App() {
     stopPolling();
     clearTokens();
     lastSyncAtRef.current = 0;
+    lastPlayingTrackIdRef.current = null;
+    lastRecentPlayedPollTimeRef.current = 0;
     setSpotifyStatus({
       state: 'disconnected',
       lastSyncAt: null,
@@ -572,14 +618,27 @@ function App() {
         stopPolling();
       } else {
         stopPolling();
-        if (spotifyStatus.state === 'access_denied' || spotifyStatus.state === 'unauthorized') {
+        if (
+          spotifyStatusRef.current.state === 'access_denied' || 
+          spotifyStatusRef.current.state === 'unauthorized' ||
+          isSpotifyRateLimited()
+        ) {
           return;
         }
+
+        // Debounce visibility reconcile to at most once per 10s to prevent mobile browser blur/focus storms
+        const now = Date.now();
+        if (now - lastVisibilityReconcileTimeRef.current < 10000) {
+          startPolling();
+          return;
+        }
+        lastVisibilityReconcileTimeRef.current = now;
+
         const activeToken = await getSpotifyToken();
         if (isCancelled || !isSpotifyActiveRef.current) return;
         if (activeToken) {
           await reconcileSpotifyData(activeToken);
-          if (!isCancelled && isSpotifyActiveRef.current) {
+          if (!isCancelled && isSpotifyActiveRef.current && !isSpotifyRateLimited()) {
             startPolling();
           }
         } else {
@@ -597,28 +656,31 @@ function App() {
     // 1. Synchronously register visibility listener
     document.addEventListener('visibilitychange', handleVisibilityChange);
 
-    // 2. Initialize session
-    getSpotifyToken()
-      .then(async (token) => {
-        if (!token || isCancelled) return;
-        setSpotifyStatus((prev) => ({
-          ...prev,
-          state: 'connecting',
-          lastSyncAt: null,
-          label: 'Spotify · Connecting',
-        }));
-        await syncSpotifyUser(token);
-      })
-      .catch((err) => {
-        isSpotifyActiveRef.current = false;
-        console.warn('Spotify session initialization error:', err instanceof Error ? err.message : String(err));
-        setSpotifyStatus({
-          state: 'error',
-          lastSyncAt: null,
-          label: 'Spotify · Sync error',
-          errorMessage: 'Failed to establish Spotify session',
+    // 2. Initialize session exactly once on mount
+    if (!hasInitializedRef.current) {
+      hasInitializedRef.current = true;
+      getSpotifyToken()
+        .then(async (token) => {
+          if (!token || isCancelled) return;
+          setSpotifyStatus((prev) => ({
+            ...prev,
+            state: 'connecting',
+            lastSyncAt: null,
+            label: 'Spotify · Connecting',
+          }));
+          await syncSpotifyUser(token);
+        })
+        .catch((err) => {
+          isSpotifyActiveRef.current = false;
+          console.warn('Spotify session initialization error:', err instanceof Error ? err.message : String(err));
+          setSpotifyStatus({
+            state: 'error',
+            lastSyncAt: null,
+            label: 'Spotify · Sync error',
+            errorMessage: 'Failed to establish Spotify session',
+          });
         });
-      });
+    }
 
     // 3. Synchronous cleanup returned directly from useEffect
     return () => {
@@ -626,7 +688,7 @@ function App() {
       document.removeEventListener('visibilitychange', handleVisibilityChange);
       stopPolling();
     };
-  }, [reconcileSpotifyData, startPolling, stopPolling, syncSpotifyUser, spotifyStatus.state]);
+  }, [reconcileSpotifyData, startPolling, stopPolling, syncSpotifyUser]);
 
   // Add discovery item into graph
   const handleAddRecommendation = (item: RecommendationItem) => {
@@ -955,14 +1017,19 @@ function App() {
                     Spotify Rate Limited
                   </h3>
                   <p className="text-xs text-[var(--text-secondary)] font-sans leading-relaxed">
-                    Spotify rate limit reached. Please wait a moment before trying again.
+                    {spotifyStatus.errorMessage || 'Spotify rate limit reached. Please wait a moment before trying again.'}
                   </p>
                   <div className="flex items-center gap-3 mt-2">
                     <button
                       onClick={handleRetrySpotifySync}
-                      className="px-4 py-2 rounded-lg bg-[var(--text-primary)] text-[var(--bg-primary)] text-xs font-semibold hover:opacity-90 transition-opacity"
+                      disabled={isSpotifyRateLimited()}
+                      className={`px-4 py-2 rounded-lg bg-[var(--text-primary)] text-[var(--bg-primary)] text-xs font-semibold transition-opacity ${
+                        isSpotifyRateLimited() ? 'opacity-50 cursor-not-allowed' : 'hover:opacity-90'
+                      }`}
                     >
-                      Retry Spotify Sync
+                      {isSpotifyRateLimited()
+                        ? `Wait (${Math.ceil(getSpotifyRateLimitRemainingMs() / 1000)}s)`
+                        : 'Retry Spotify Sync'}
                     </button>
                     <button
                       onClick={() => handlePresetChange('electronic')}

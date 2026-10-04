@@ -132,6 +132,7 @@ export interface SpotifyStatusInfo {
   errorMessage?: string;
   userId?: string;
   userName?: string;
+  isQuotaExceeded?: boolean;
 }
 
 // -------------------------------------------------------------

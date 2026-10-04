@@ -9,15 +9,26 @@ export class SpotifyApiError extends Error {
   readonly endpoint: string;
   readonly classification: SpotifyConnectionState;
   readonly retryAfterSeconds?: number;
+  readonly reason?: string;
+  readonly isQuotaExceeded?: boolean;
 
-  constructor(status: number, endpoint: string, message?: string, retryAfterSeconds?: number) {
-    const defaultMsg = getSpotifyErrorMessage(status);
+  constructor(
+    status: number,
+    endpoint: string,
+    message?: string,
+    retryAfterSeconds?: number,
+    reason?: string,
+    isQuotaExceeded?: boolean
+  ) {
+    const defaultMsg = getSpotifyErrorMessage(status, isQuotaExceeded);
     super(message || defaultMsg);
     this.name = 'SpotifyApiError';
     this.status = status;
     this.endpoint = sanitizeEndpoint(endpoint);
     this.classification = classifySpotifyStatus(status);
     this.retryAfterSeconds = retryAfterSeconds;
+    this.reason = reason;
+    this.isQuotaExceeded = isQuotaExceeded;
   }
 }
 
@@ -62,14 +73,16 @@ export function classifySpotifyStatus(status: number): SpotifyConnectionState {
  * Returns human-friendly, non-technical explanation messages for errors.
  * Never exposes raw upstream JSON bodies or token details to the user.
  */
-export function getSpotifyErrorMessage(status: number): string {
+export function getSpotifyErrorMessage(status: number, isQuotaExceeded = false): string {
   switch (status) {
     case 401:
       return 'Spotify session expired or unauthorized. Please reconnect.';
     case 403:
       return "Your Spotify account was authenticated, but Spotify isn't currently allowing this account to access this Development Mode app. Ask the app owner to grant access, or try again later.";
     case 429:
-      return 'Spotify rate limit exceeded. Please wait a moment and try again.';
+      return isQuotaExceeded
+        ? 'Spotify app quota reached (QUOTA_EXCEEDED). Spotify Developer mode quota for this application has been exceeded. Please try again later.'
+        : 'Spotify rate limit exceeded. Please wait a moment and try again.';
     case 0:
       return 'Network connection issue communicating with Spotify.';
     default:

@@ -165,7 +165,11 @@ export const refreshSpotifyToken = async (): Promise<string | null> => {
 
   refreshPromise = (async () => {
     try {
-      const res = await fetch('/api/auth/spotify/refresh', {
+      const refreshUrl =
+        typeof window !== 'undefined' && window.location?.origin
+          ? '/api/auth/spotify/refresh'
+          : 'http://localhost/api/auth/spotify/refresh';
+      const res = await fetch(refreshUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
@@ -309,9 +313,29 @@ export const getAccessTokenFromUrl = getSpotifyToken;
 let rateLimitResetTime = 0;
 let consecutiveAuthFailures = 0;
 
+export interface Spotify429Metadata {
+  timestamp: number;
+  endpoint: string;
+  retryAfterSec: number;
+  reason: string;
+  isQuotaExceeded: boolean;
+}
+
+let last429Metadata: Spotify429Metadata | null = null;
+let inMemoryUserProfile: SpotifyUserProfile | null = null;
+let inMemoryTopTracks: RawTrackRecord[] | null = null;
+
+export const getSpotifyRateLimitRemainingMs = (): number => Math.max(0, rateLimitResetTime - Date.now());
+export const isSpotifyRateLimited = (): boolean => Date.now() < rateLimitResetTime;
+export const getLast429Metadata = (): Spotify429Metadata | null => (last429Metadata ? { ...last429Metadata } : null);
+
 export const resetSpotifyRateLimitState = () => {
   rateLimitResetTime = 0;
   consecutiveAuthFailures = 0;
+  last429Metadata = null;
+  inMemoryUserProfile = null;
+  inMemoryTopTracks = null;
+  inMemoryArtistGenreCache.clear();
 };
 
 // Dev-safe request instrumentation (timestamps and request sequence numbers, NEVER logging tokens)
@@ -343,10 +367,19 @@ export async function spotifyFetch(url: string, token: string, timeoutMs = 8000)
   if (now < rateLimitResetTime) {
     const waitSec = Math.ceil((rateLimitResetTime - now) / 1000);
     logSpotifySyncDiagnostic('429', endpointPath, `${waitSec}s active cooldown`);
-    return new Response(JSON.stringify({ error: 'Rate limit active', retryAfter: waitSec }), {
-      status: 429,
-      headers: { 'Retry-After': String(waitSec) },
-    });
+    return new Response(
+      JSON.stringify({
+        error: {
+          message: last429Metadata?.reason || 'Rate limit active',
+          reason: last429Metadata?.reason || 'RATE_LIMITED',
+        },
+        retryAfter: waitSec,
+      }),
+      {
+        status: 429,
+        headers: { 'Retry-After': String(waitSec), 'Content-Type': 'application/json' },
+      }
+    );
   }
 
   logSpotifyRequest(endpointPath);
@@ -402,7 +435,31 @@ export async function spotifyFetch(url: string, token: string, timeoutMs = 8000)
       ? Math.min(Math.max(parseInt(retryAfterHeader, 10), 1), 300)
       : 5;
     rateLimitResetTime = Date.now() + retryAfterSec * 1000;
-    logSpotifySyncDiagnostic('429', endpointPath, `${retryAfterSec}s backoff`);
+
+    let reason = '';
+    let isQuotaExceeded = false;
+    try {
+      const cloned = res.clone();
+      const body = await cloned.json();
+      reason = body?.error?.message || body?.reason || body?.error || '';
+      isQuotaExceeded = /quota|QUOTA_EXCEEDED/i.test(reason) || /quota|QUOTA_EXCEEDED/i.test(JSON.stringify(body));
+    } catch {
+      // Body is not JSON
+    }
+
+    last429Metadata = {
+      timestamp: Date.now(),
+      endpoint: endpointPath,
+      retryAfterSec,
+      reason,
+      isQuotaExceeded,
+    };
+
+    logSpotifySyncDiagnostic(
+      '429',
+      endpointPath,
+      `${retryAfterSec}s backoff${isQuotaExceeded ? ' (QUOTA_EXCEEDED)' : ''}`
+    );
   }
 
   // Handle 5xx Server Failure
@@ -505,19 +562,25 @@ async function resolveArtistGenres(artistNames: string[], knownGenreMap: Record<
  * Fetches the authenticated user profile (/v1/me) to establish stable identity and isolation.
  * Note: Never log access tokens, refresh tokens, cookies, or user credentials.
  */
-export const fetchSpotifyUserProfile = async (token: string): Promise<SpotifyUserProfile | null> => {
+export const fetchSpotifyUserProfile = async (token: string, force = false): Promise<SpotifyUserProfile | null> => {
+  if (!force && inMemoryUserProfile) {
+    return inMemoryUserProfile;
+  }
+
   const res = await spotifyFetch('https://api.spotify.com/v1/me', token);
   if (!res.ok) {
-    throw new SpotifyApiError(res.status, '/v1/me');
+    const meta = last429Metadata;
+    throw new SpotifyApiError(res.status, '/v1/me', meta?.reason, meta?.retryAfterSec, meta?.reason, meta?.isQuotaExceeded);
   }
   const data: SpotifyUserProfile = await res.json();
-  return {
+  inMemoryUserProfile = {
     id: data.id,
     display_name: data.display_name || null,
     email: data.email,
     product: data.product,
     country: data.country,
   };
+  return inMemoryUserProfile;
 };
 
 /**
@@ -539,7 +602,8 @@ export const fetchCurrentlyPlaying = async (token: string): Promise<SpotifyPlayb
   }
 
   if (!res.ok) {
-    throw new SpotifyApiError(res.status, '/v1/me/player/currently-playing');
+    const meta = last429Metadata;
+    throw new SpotifyApiError(res.status, '/v1/me/player/currently-playing', meta?.reason, meta?.retryAfterSec, meta?.reason, meta?.isQuotaExceeded);
   }
   const data: SpotifyCurrentlyPlayingPayload = await res.json();
   if (!data || !data.item) {
@@ -586,7 +650,8 @@ export const fetchRecentlyPlayedEvents = async (
 
   const res = await spotifyFetch(url, token);
   if (!res.ok) {
-    throw new SpotifyApiError(res.status, '/v1/me/player/recently-played');
+    const meta = last429Metadata;
+    throw new SpotifyApiError(res.status, '/v1/me/player/recently-played', meta?.reason, meta?.retryAfterSec, meta?.reason, meta?.isQuotaExceeded);
   }
 
   const data: SpotifyRecentlyPlayedPayload = await res.json();
@@ -620,13 +685,36 @@ export const fetchRecentlyPlayedEvents = async (
 /**
  * Fetches top tracks and builds initial normalized library
  */
-export const fetchSpotifyTopTracks = async (token: string): Promise<RawTrackRecord[]> => {
+export const fetchSpotifyTopTracks = async (token: string, force = false): Promise<RawTrackRecord[]> => {
+  if (!force && inMemoryTopTracks) {
+    return inMemoryTopTracks;
+  }
+
   const response = await spotifyFetch('https://api.spotify.com/v1/me/top/tracks?limit=35&time_range=medium_term', token);
-  if (!response.ok) throw new SpotifyApiError(response.status, '/v1/me/top/tracks');
+  if (!response.ok) {
+    const meta = last429Metadata;
+    throw new SpotifyApiError(response.status, '/v1/me/top/tracks', meta?.reason, meta?.retryAfterSec, meta?.reason, meta?.isQuotaExceeded);
+  }
   const data: SpotifyTopTracksPayload = await response.json();
 
   let genreMap: Record<string, string> = {};
-  const artistIds = [...new Set(data.items.map((item) => item.artists[0]?.id).filter(Boolean))].slice(0, 50);
+  const uniqueArtists = [...new Set(data.items.map((item) => item.artists[0]?.name).filter(Boolean))] as string[];
+
+  // Seed genreMap from session cache first
+  for (const name of uniqueArtists) {
+    const cached = inMemoryArtistGenreCache.get(name.trim().toLowerCase());
+    if (cached) {
+      genreMap[name] = cached;
+    }
+  }
+
+  // Only query /v1/artists for artists whose genre is NOT already known in cache
+  const missingArtists = data.items.filter((item) => {
+    const name = item.artists[0]?.name;
+    return !name || !genreMap[name];
+  });
+
+  const artistIds = [...new Set(missingArtists.map((item) => item.artists[0]?.id).filter(Boolean))].slice(0, 50);
 
   if (artistIds.length > 0) {
     try {
@@ -636,6 +724,7 @@ export const fetchSpotifyTopTracks = async (token: string): Promise<RawTrackReco
         artistsData.artists?.forEach((artist) => {
           if (artist?.name && artist.genres?.length > 0) {
             genreMap[artist.name] = artist.genres[0];
+            inMemoryArtistGenreCache.set(artist.name.trim().toLowerCase(), artist.genres[0]);
           }
         });
       }
@@ -644,10 +733,9 @@ export const fetchSpotifyTopTracks = async (token: string): Promise<RawTrackReco
     }
   }
 
-  const uniqueArtists = [...new Set(data.items.map((item) => item.artists[0]?.name).filter(Boolean))] as string[];
   genreMap = await resolveArtistGenres(uniqueArtists, genreMap);
 
-  return data.items.map((item) => ({
+  const records = data.items.map((item) => ({
     id: item.id,
     track: item.name,
     artist: item.artists[0]?.name || 'Unknown Artist',
@@ -657,6 +745,9 @@ export const fetchSpotifyTopTracks = async (token: string): Promise<RawTrackReco
     album: item.album?.name,
     duration: formatDurationMs(item.duration_ms),
   }));
+
+  inMemoryTopTracks = records;
+  return records;
 };
 
 function formatDurationMs(ms?: number): string {
