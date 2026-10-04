@@ -11,6 +11,7 @@ import {
   CANONICAL_SPECIFICITY_WEIGHTS,
   EVERY_NOISE_MICROGENRE_MAP,
   MORPHOLOGICAL_RULES,
+  isCanonicalGenre,
 } from './ontologyData';
 
 export type GenreConfidenceLevel = 'HIGH' | 'MEDIUM' | 'LOW' | 'UNKNOWN';
@@ -137,15 +138,18 @@ export function evaluateGenreEvidence(input: EvidenceQueryInput): ResolvedGenreK
     }
 
     if (!morphMatched) {
-      // Direct raw Spotify genre fallback
-      evidenceList.push({
-        source: 'spotify_artist',
-        rawGenre: raw,
-        matchedCanonical: cleanGenreString(raw),
-        derivedSubgenre: cleanGenreString(raw),
-        weight: 50,
-        notes: `Uncategorized Spotify genre tag "${raw}"`,
-      });
+      // Direct raw Spotify genre fallback only if it matches a valid canonical major genre
+      const cleanCanonical = cleanGenreString(raw);
+      if (isCanonicalGenre(cleanCanonical)) {
+        evidenceList.push({
+          source: 'spotify_artist',
+          rawGenre: raw,
+          matchedCanonical: cleanCanonical,
+          derivedSubgenre: cleanCanonical,
+          weight: CANONICAL_SPECIFICITY_WEIGHTS[cleanCanonical] || 50,
+          notes: `Exact canonical Spotify genre tag "${raw}"`,
+        });
+      }
     }
   }
 
@@ -172,21 +176,25 @@ export function evaluateGenreEvidence(input: EvidenceQueryInput): ResolvedGenreK
         )
       : { grade: 'EXACT', isVerified: true, confidenceDiscount: 0, reason: 'No fallback artist name supplied' };
 
-    // If completely mismatched or identified as track-title homonym / collision, reject immediately
-    if (!verification.isVerified && verification.confidenceDiscount >= 100) {
+    // If candidate identity could not be verified (AMBIGUOUS or MISMATCH), reject immediately!
+    // External fallback from unverified candidates must NEVER pollute the genre engine.
+    if (!verification.isVerified) {
       continue;
     }
 
     const weightDiscount = verification.confidenceDiscount;
+    const source = input.trackTitle ? 'fallback_song' : 'fallback_artist';
+    // External fallback is inherently secondary compared to verified catalog metadata
+    const sourceTrustDiscount = source === 'fallback_song' ? 10 : 20;
 
     if (EVERY_NOISE_MICROGENRE_MAP[clean]) {
       const [canonical, subgenre] = EVERY_NOISE_MICROGENRE_MAP[clean];
       const baseSpecificity = CANONICAL_SPECIFICITY_WEIGHTS[canonical] || 75;
       const isExactCanonical = clean === canonical.toLowerCase();
       const isSpecificSubgenre = subgenre.toLowerCase() !== canonical.toLowerCase();
-      const weight = Math.max(10, baseSpecificity + (isExactCanonical ? 15 : isSpecificSubgenre ? 5 : 0) - weightDiscount);
+      const weight = Math.max(10, baseSpecificity + (isExactCanonical ? 15 : isSpecificSubgenre ? 5 : 0) - weightDiscount - sourceTrustDiscount);
       evidenceList.push({
-        source: input.trackTitle ? 'fallback_song' : 'fallback_artist',
+        source,
         rawGenre: raw,
         matchedCanonical: canonical,
         derivedSubgenre: subgenre,
@@ -196,42 +204,45 @@ export function evaluateGenreEvidence(input: EvidenceQueryInput): ResolvedGenreK
       continue;
     }
 
+    let fallbackMorphMatched = false;
     for (const rule of MORPHOLOGICAL_RULES) {
       if (rule.pattern.test(clean)) {
         const subgenre = rule.subgenreDeriver(clean);
         const baseSpecificity = CANONICAL_SPECIFICITY_WEIGHTS[rule.canonical] || rule.baseWeight;
         const isExactCanonical = clean === rule.canonical.toLowerCase();
         const isSpecificSubgenre = subgenre.toLowerCase() !== rule.canonical.toLowerCase();
-        const weight = Math.max(10, baseSpecificity + (isExactCanonical ? 15 : isSpecificSubgenre ? 5 : 0) - weightDiscount);
+        const weight = Math.max(10, baseSpecificity + (isExactCanonical ? 15 : isSpecificSubgenre ? 5 : 0) - weightDiscount - sourceTrustDiscount);
         evidenceList.push({
-          source: input.trackTitle ? 'fallback_song' : 'fallback_artist',
+          source,
           rawGenre: raw,
           matchedCanonical: rule.canonical,
           derivedSubgenre: subgenre,
           weight,
           notes: `External fallback morphological match for "${clean}": ${verification.reason}`,
         });
+        fallbackMorphMatched = true;
         break;
+      }
+    }
+
+    if (!fallbackMorphMatched) {
+      const cleanCanonical = cleanGenreString(raw);
+      if (isCanonicalGenre(cleanCanonical)) {
+        const baseSpecificity = CANONICAL_SPECIFICITY_WEIGHTS[cleanCanonical] || 50;
+        const weight = Math.max(10, baseSpecificity - weightDiscount - sourceTrustDiscount);
+        evidenceList.push({
+          source,
+          rawGenre: raw,
+          matchedCanonical: cleanCanonical,
+          derivedSubgenre: cleanCanonical,
+          weight,
+          notes: `External exact canonical match for "${raw}": ${verification.reason}`,
+        });
       }
     }
   }
 
-  // 4. If zero evidence collected, return honest Unknown
-  if (evidenceList.length === 0) {
-    return {
-      canonicalGenre: 'Unknown',
-      subgenre: 'Unknown',
-      confidence: 'UNKNOWN',
-      confidenceScore: 0,
-      source: 'unknown',
-      evidence: [],
-      candidates: [],
-      selectionReason: 'Insufficient reliable genre evidence across providers',
-      conflictDetected: false,
-    };
-  }
-
-  // 5. Deterministic Candidate Scoring
+  // 4. Deterministic Candidate Scoring
   interface ScoredCandidate {
     canonical: string;
     subgenre: string;
@@ -245,6 +256,11 @@ export function evaluateGenreEvidence(input: EvidenceQueryInput): ResolvedGenreK
   const candidateMap = new Map<string, ScoredCandidate>();
 
   for (const item of evidenceList) {
+    // Strictly preserve the 30 canonical genres: non-canonical tags cannot become celestial systems!
+    if (!isCanonicalGenre(item.matchedCanonical)) {
+      continue;
+    }
+
     if (!candidateMap.has(item.matchedCanonical)) {
       candidateMap.set(item.matchedCanonical, {
         canonical: item.matchedCanonical,
@@ -257,7 +273,7 @@ export function evaluateGenreEvidence(input: EvidenceQueryInput): ResolvedGenreK
       });
     } else {
       const existing = candidateMap.get(item.matchedCanonical)!;
-      existing.totalScore += item.weight * 0.5; // Diminishing returns for multiple signals in same family
+      existing.totalScore += item.weight * 0.4; // Diminishing returns for multiple signals in same family
       existing.evidenceCount++;
       existing.sources.add(item.source);
 
@@ -276,14 +292,29 @@ export function evaluateGenreEvidence(input: EvidenceQueryInput): ResolvedGenreK
     }
   }
 
-  // Multi-source convergence bonus
+  // If zero valid canonical candidates collected, return honest Unknown
+  if (candidateMap.size === 0) {
+    return {
+      canonicalGenre: 'Unknown',
+      subgenre: 'Unknown',
+      confidence: 'UNKNOWN',
+      confidenceScore: 0,
+      source: 'unknown',
+      evidence: evidenceList,
+      candidates: [],
+      selectionReason: 'No matching canonical genre found across sources',
+      conflictDetected: false,
+    };
+  }
+
+  // Multi-source convergence bonus (independent sources agreeing increase certainty)
   for (const candidate of candidateMap.values()) {
     if (candidate.sources.size > 1) {
       candidate.totalScore += 25; // Bonus for independent multi-source agreement
     }
   }
 
-  // Detect conflict
+  // Sort candidates deterministically
   const sortedCandidates = Array.from(candidateMap.values()).sort((a, b) => {
     if (b.totalScore !== a.totalScore) return b.totalScore - a.totalScore;
     if (b.highestWeight !== a.highestWeight) return b.highestWeight - a.highestWeight;
@@ -298,19 +329,41 @@ export function evaluateGenreEvidence(input: EvidenceQueryInput): ResolvedGenreK
 
   let conflictDetected = false;
   let conflictResolution: string | undefined;
+  let conflictSeverity: 'NONE' | 'MODERATE' | 'SEVERE' = 'NONE';
 
-  if (second && second.canonical !== winner.canonical && second.totalScore >= winner.totalScore * 0.75) {
-    conflictDetected = true;
-    conflictResolution = `Resolved conflict between ${winner.canonical} (${winner.totalScore.toFixed(0)}) and ${second.canonical} (${second.totalScore.toFixed(0)}) via specificity weighting and source convergence.`;
+  // Conflict Detection & Information Paradox Invariant:
+  // When conflicting evidence exists from disparate canonical families,
+  // MORE INFORMATION MUST NOT AUTOMATICALLY MEAN MORE CONFIDENCE!
+  if (second && second.canonical !== winner.canonical) {
+    const ratio = second.totalScore / winner.totalScore;
+    if (ratio >= 0.85) {
+      conflictDetected = true;
+      conflictSeverity = 'SEVERE';
+      conflictResolution = `Severe conflict between ${winner.canonical} (${winner.totalScore.toFixed(0)}) and ${second.canonical} (${second.totalScore.toFixed(0)}): confidence penalized due to contradictory evidence.`;
+    } else if (ratio >= 0.70) {
+      conflictDetected = true;
+      conflictSeverity = 'MODERATE';
+      conflictResolution = `Resolved conflict between ${winner.canonical} (${winner.totalScore.toFixed(0)}) and ${second.canonical} (${second.totalScore.toFixed(0)}) via specificity weighting and source convergence.`;
+    }
   }
 
-  // 6. Confidence Level Derivation
+  // 5. Confidence Level Derivation
   let confidence: GenreConfidenceLevel = 'UNKNOWN';
-  if (
+  let confidenceScore = Math.min(1.0, Number((winner.totalScore / 130).toFixed(2)));
+
+  const hasAuthoritativeKnowledge = winner.sources.has('artist_knowledge') || winner.sources.has('curated');
+
+  if (conflictSeverity === 'SEVERE' && !hasAuthoritativeKnowledge) {
+    // Information Paradox: Contradictory unverified signals lower confidence
+    confidence = 'LOW';
+    confidenceScore = Math.min(confidenceScore * 0.5, 0.40);
+  } else if (conflictSeverity === 'MODERATE' && !hasAuthoritativeKnowledge) {
+    confidence = 'MEDIUM';
+    confidenceScore = Math.min(confidenceScore * 0.85, 0.70);
+  } else if (
     winner.totalScore >= 100 ||
     (winner.sources.size > 1 && winner.totalScore >= 85) ||
-    winner.sources.has('artist_knowledge') ||
-    winner.sources.has('curated')
+    hasAuthoritativeKnowledge
   ) {
     confidence = 'HIGH';
   } else if (winner.totalScore >= 60) {
@@ -321,7 +374,6 @@ export function evaluateGenreEvidence(input: EvidenceQueryInput): ResolvedGenreK
     confidence = 'UNKNOWN';
   }
 
-  const confidenceScore = Math.min(1.0, Number((winner.totalScore / 130).toFixed(2)));
   const uniqueCandidateNames = sortedCandidates.map((c) => c.canonical);
 
   const primarySource = winner.sources.has('artist_knowledge')
@@ -351,3 +403,4 @@ export function evaluateGenreEvidence(input: EvidenceQueryInput): ResolvedGenreK
     conflictResolution,
   };
 }
+

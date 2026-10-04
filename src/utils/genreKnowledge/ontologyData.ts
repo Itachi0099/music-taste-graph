@@ -349,7 +349,39 @@ export const MORPHOLOGICAL_RULES: MorphologicalRule[] = [
     subgenreDeriver: () => 'Indie Pop',
     baseWeight: 76,
   },
+  // 13. Pop & Electronic Umbrellas
+  {
+    pattern: /\b(pop|bubblegum|europop|dance-pop|k-pop|j-pop|c-pop|cantopop|mandopop|hyperpop|power\s+pop|chanson|french\s+pop|desi\s+pop|bollywood\s+pop|teen\s+pop|acoustic\s+pop|art\s+pop)\b/i,
+    canonical: 'Pop',
+    subgenreDeriver: (m) =>
+      m
+        .split(/\s+/)
+        .map((w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
+        .join(' ') || 'Pop',
+    baseWeight: 45,
+  },
+  {
+    pattern: /\b(electronic|electronica|edm|electrowave|electro|complextro|bass\s+music)\b/i,
+    canonical: 'Electronic',
+    subgenreDeriver: (m) =>
+      m
+        .split(/\s+/)
+        .map((w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
+        .join(' ') || 'Electronic',
+    baseWeight: 50,
+  },
 ];
+
+/**
+ * Valid canonical major genres (exactly the 30 visual stellar systems).
+ */
+export const VALID_CANONICAL_GENRES: ReadonlySet<string> = new Set<string>(
+  Object.keys(CANONICAL_SPECIFICITY_WEIGHTS)
+);
+
+export function isCanonicalGenre(genre: string): boolean {
+  return VALID_CANONICAL_GENRES.has(genre);
+}
 
 /**
  * Compact Every Noise Microgenre Reference Map.

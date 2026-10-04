@@ -118,8 +118,52 @@ export function verifyExternalArtistIdentity(
     }
   }
 
-  // 3. Exact Identity Match
+  // 3. Exact Identity Match with Mononym Disambiguation Guard
+  // In external global catalogs (Apple Music / iTunes), short names (<= 5 chars, single token like "Noor", "Eve", "Zan")
+  // suffer massive homonym collisions across disjoint artists.
+  const tokensTarget = extractCoreTokens(targetArtist);
+  const isShortMononym = tokensTarget.length <= 1 && normTarget.length <= 5;
+
   if (normTarget === normCandidate) {
+    // If a target track was requested, but external provider could not corroborate the track:
+    if (isShortMononym && targetTrack && !targetKnowledge) {
+      if (!candidateTrack) {
+        return {
+          grade: 'AMBIGUOUS',
+          isVerified: false,
+          confidenceDiscount: 60,
+          reason: `Uncorroborated mononym/short artist name ("${targetArtist}") without track match ("${targetTrack}") has high external catalog ambiguity`,
+        };
+      }
+      const normTargetTrack = normalizeArtistKey(targetTrack);
+      const normCandTrack = normalizeArtistKey(candidateTrack);
+      const trackOverlap = tokenOverlapRatio(extractCoreTokens(targetTrack), extractCoreTokens(candidateTrack));
+      const trackMatches =
+        normTargetTrack === normCandTrack ||
+        trackOverlap >= 0.5 ||
+        normCandTrack.includes(normTargetTrack) ||
+        normTargetTrack.includes(normCandTrack);
+
+      if (!trackMatches) {
+        return {
+          grade: 'MISMATCH',
+          isVerified: false,
+          confidenceDiscount: 80,
+          reason: `Candidate artist matches mononym ("${candidateArtist}"), but candidate track ("${candidateTrack}") does not match target track ("${targetTrack}")`,
+        };
+      }
+    }
+
+    // If no target track was requested, but artist is an unverified short mononym without track corroboration:
+    if (isShortMononym && !candidateTrack && !targetKnowledge) {
+      return {
+        grade: 'AMBIGUOUS',
+        isVerified: false,
+        confidenceDiscount: 50,
+        reason: `Uncorroborated mononym query ("${targetArtist}") without track confirmation has high catalog collision risk across external providers`,
+      };
+    }
+
     return {
       grade: 'EXACT',
       isVerified: true,
@@ -129,7 +173,6 @@ export function verifyExternalArtistIdentity(
   }
 
   // 4. Token-level analysis
-  const tokensTarget = extractCoreTokens(targetArtist);
   const tokensCandidate = extractCoreTokens(candidateArtist);
   const overlap = tokenOverlapRatio(tokensTarget, tokensCandidate);
 

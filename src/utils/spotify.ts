@@ -13,7 +13,7 @@ import {
   classifyCanonicalGenre,
   diagnoseArtistGenre,
 } from './genreClassifier';
-import { verifyExternalArtistIdentity } from './genreKnowledge';
+import { verifyExternalArtistIdentity, resolveGenreWithKnowledge } from './genreKnowledge';
 
 export { SpotifyApiError, classifySpotifyStatus, getSpotifyStatusLabel, logSpotifySyncDiagnostic } from './spotifyError';
 export {
@@ -660,17 +660,38 @@ export async function resolveArtistGenres(
             }
           }
 
-          // 5. Classify the fallback genre into canonical taxonomy
+          // 5. Classify the fallback genre into canonical taxonomy via knowledge engine
           if (resolvedGenre && resolvedGenre.trim().length > 0 && resolvedGenre.toLowerCase() !== 'unknown') {
-            const classified = classifyCanonicalGenre([resolvedGenre], artistName, trackTitle);
-            if (classified.canonicalGenre !== 'Unknown') {
+            const knowledge = resolveGenreWithKnowledge({
+              artistName,
+              trackTitle,
+              fallbackGenres: [resolvedGenre],
+            });
+            if (knowledge.canonicalGenre !== 'Unknown') {
               const info: ResolvedGenreInfo = {
-                canonicalGenre: classified.canonicalGenre,
-                subgenre: classified.subgenre,
+                canonicalGenre: knowledge.canonicalGenre,
+                subgenre: knowledge.subgenre,
               };
               knownGenreMap[artistName] = info;
               inMemoryArtistGenreCache.set(artistName.toLowerCase(), info);
-              diagnoseArtistGenre(artistName, [], [resolvedGenre], classified, false);
+              diagnoseArtistGenre(
+                artistName,
+                [],
+                [resolvedGenre],
+                {
+                  canonicalGenre: knowledge.canonicalGenre,
+                  subgenre: knowledge.subgenre,
+                  confidence: knowledge.confidenceScore,
+                  source: knowledge.source,
+                  candidates: knowledge.candidates,
+                  selectionReason: knowledge.selectionReason,
+                  confidenceLevel: knowledge.confidence,
+                  evidence: knowledge.evidence,
+                  conflictDetected: knowledge.conflictDetected,
+                  conflictResolution: knowledge.conflictResolution,
+                },
+                false
+              );
               return;
             }
           }
