@@ -5,13 +5,23 @@
  * specificity scoring, and catalog collision mitigation.
  */
 
+import {
+  resolveGenreWithKnowledge,
+  type GenreConfidenceLevel,
+  type GenreEvidenceItem,
+} from './genreKnowledge';
+
 export interface GenreClassificationResult {
   canonicalGenre: string;
   subgenre: string;
   confidence: number;
-  source: 'spotify' | 'fallback_song' | 'fallback_artist' | 'curated' | 'unknown';
+  source: 'spotify' | 'fallback_song' | 'fallback_artist' | 'curated' | 'unknown' | string;
   candidates: string[];
   selectionReason: string;
+  confidenceLevel?: GenreConfidenceLevel;
+  evidence?: GenreEvidenceItem[];
+  conflictDetected?: boolean;
+  conflictResolution?: string;
 }
 
 /**
@@ -32,14 +42,14 @@ export const CURATED_ARTIST_OVERRIDES: Record<string, { canonicalGenre: string; 
  * Higher specificity weight ensures specific subgenres take precedence over broad umbrellas
  * (e.g., Contemporary R&B beats generic Pop; Psytrance beats generic Electronic).
  */
-interface CanonicalRule {
+export interface CanonicalRule {
   canonical: string;
   weight: number; // Higher number = more specific
   patterns: RegExp[];
   subgenreDeriver?: (raw: string) => string;
 }
 
-const CANONICAL_RULES: CanonicalRule[] = [
+export const CANONICAL_RULES: CanonicalRule[] = [
   // 1. Psytrance (High specificity)
   {
     canonical: 'Psytrance',
@@ -389,117 +399,31 @@ const CANONICAL_RULES: CanonicalRule[] = [
 
 /**
  * Classifies a set of raw genre strings into a single canonical genre and subgenre.
- * Implements deterministic specificity ranking and conflict resolution.
+ * Implements deterministic specificity ranking, Every Noise ontology knowledge,
+ * and explainable conflict resolution.
  */
 export function classifyCanonicalGenre(
   sourceGenres: string[] | string | undefined | null,
   artistName?: string,
-  _trackTitle?: string
+  trackTitle?: string
 ): GenreClassificationResult {
-  const normArtist = (artistName || '').trim().toLowerCase();
-
-  // 1. Check isolated curated override registry for verified catalog homonym conflations
-  if (normArtist && CURATED_ARTIST_OVERRIDES[normArtist]) {
-    const override = CURATED_ARTIST_OVERRIDES[normArtist];
-    return {
-      canonicalGenre: override.canonicalGenre,
-      subgenre: override.subgenre,
-      confidence: 1.0,
-      source: 'curated',
-      candidates: [override.canonicalGenre],
-      selectionReason: `Curated registry override: ${override.reason}`,
-    };
-  }
-
-  // 2. Normalize input genres into string array
-  const rawList: string[] = [];
-  if (Array.isArray(sourceGenres)) {
-    rawList.push(...sourceGenres);
-  } else if (typeof sourceGenres === 'string' && sourceGenres.trim().length > 0) {
-    rawList.push(sourceGenres);
-  }
-
-  const validGenres = rawList
-    .map((g) => g.trim())
-    .filter((g) => g.length > 0 && g.toLowerCase() !== 'unknown');
-
-  if (validGenres.length === 0) {
-    return {
-      canonicalGenre: 'Unknown',
-      subgenre: 'Unknown',
-      confidence: 0,
-      source: 'unknown',
-      candidates: [],
-      selectionReason: 'No source genres provided or all entries were Unknown',
-    };
-  }
-
-  // 3. Match rules against all raw genres and score candidates
-  interface ScoredCandidate {
-    rule: CanonicalRule;
-    rawMatched: string;
-    score: number;
-  }
-
-  const candidates: ScoredCandidate[] = [];
-
-  for (const raw of validGenres) {
-    for (const rule of CANONICAL_RULES) {
-      for (const pattern of rule.patterns) {
-        if (pattern.test(raw)) {
-          // Score: base rule specificity weight + exact match boost
-          let score = rule.weight;
-          if (raw.toLowerCase() === rule.canonical.toLowerCase()) {
-            score += 15;
-          }
-          candidates.push({ rule, rawMatched: raw, score });
-          break; // First pattern match per rule per raw string is sufficient
-        }
-      }
-    }
-  }
-
-  if (candidates.length === 0) {
-    // If no canonical rule matched, capitalize the first valid source genre cleanly rather than guessing Country/Electronic
-    const fallbackName = cleanGenreString(validGenres[0]);
-    return {
-      canonicalGenre: fallbackName,
-      subgenre: fallbackName,
-      confidence: 0.4,
-      source: 'fallback_artist',
-      candidates: [fallbackName],
-      selectionReason: `Unrecognized source genre "${validGenres[0]}" retained with clean casing`,
-    };
-  }
-
-  // 4. Sort candidates deterministically:
-  //    Primary: Score descending (higher score wins)
-  //    Secondary: Base rule specificity weight descending (more specific rule wins on exact match tie)
-  //    Tertiary: Canonical name alphabetical ascending (guarantees 100% input-order invariance on equal weight ties)
-  candidates.sort((a, b) => {
-    if (b.score !== a.score) {
-      return b.score - a.score;
-    }
-    if (b.rule.weight !== a.rule.weight) {
-      return b.rule.weight - a.rule.weight;
-    }
-    return a.rule.canonical.localeCompare(b.rule.canonical);
+  const result = resolveGenreWithKnowledge({
+    artistName: artistName || '',
+    trackTitle,
+    spotifyGenres: sourceGenres,
   });
 
-  const best = candidates[0];
-  const derivedSubgenre = best.rule.subgenreDeriver
-    ? best.rule.subgenreDeriver(best.rawMatched)
-    : cleanGenreString(best.rawMatched);
-
-  const uniqueCanonicalCandidates = [...new Set(candidates.map((c) => c.rule.canonical))];
-
   return {
-    canonicalGenre: best.rule.canonical,
-    subgenre: derivedSubgenre,
-    confidence: Math.min(1.0, Number((best.score / 100).toFixed(2))),
-    source: 'spotify',
-    candidates: uniqueCanonicalCandidates,
-    selectionReason: `Matched pattern on "${best.rawMatched}" with specificity score ${best.score}`,
+    canonicalGenre: result.canonicalGenre,
+    subgenre: result.subgenre,
+    confidence: result.confidenceScore,
+    source: (result.source === 'curated' ? 'curated' : result.source === 'unknown' ? 'unknown' : 'spotify') as any,
+    candidates: result.candidates,
+    selectionReason: result.selectionReason,
+    confidenceLevel: result.confidence,
+    evidence: result.evidence,
+    conflictDetected: result.conflictDetected,
+    conflictResolution: result.conflictResolution,
   };
 }
 

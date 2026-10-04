@@ -541,16 +541,16 @@ export async function resolveArtistGenres(
       continue;
     }
 
-    // Check curated registry for verified catalog homonym conflation (e.g. Guinea Pigs)
-    const classifiedOverride = classifyCanonicalGenre([], item.artistName, item.trackTitle);
-    if (classifiedOverride.source === 'curated') {
+    // Check local knowledge engine and curated registry (e.g. Guinea Pigs, Damru)
+    const classifiedKnowledge = classifyCanonicalGenre([], item.artistName, item.trackTitle);
+    if (classifiedKnowledge.canonicalGenre !== 'Unknown') {
       const info: ResolvedGenreInfo = {
-        canonicalGenre: classifiedOverride.canonicalGenre,
-        subgenre: classifiedOverride.subgenre,
+        canonicalGenre: classifiedKnowledge.canonicalGenre,
+        subgenre: classifiedKnowledge.subgenre,
       };
       knownGenreMap[item.artistName] = info;
       inMemoryArtistGenreCache.set(key, info);
-      diagnoseArtistGenre(item.artistName, [], [], classifiedOverride, false);
+      diagnoseArtistGenre(item.artistName, [], [], classifiedKnowledge, false);
       continue;
     }
 
@@ -581,7 +581,11 @@ export async function resolveArtistGenres(
                 const songData = await songRes.json();
                 const songItem = songData.results?.[0];
                 if (songItem && songItem.primaryGenreName) {
-                  resolvedGenre = songItem.primaryGenreName;
+                  const songArtist = (songItem.artistName || '').toLowerCase();
+                  const targetName = artistName.toLowerCase();
+                  if (songArtist.includes(targetName) || targetName.includes(songArtist)) {
+                    resolvedGenre = songItem.primaryGenreName;
+                  }
                 }
               }
             } catch {

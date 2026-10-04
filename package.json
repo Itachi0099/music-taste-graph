@@ -10,6 +10,7 @@
     "build": "tsc -b && vite build",
     "lint": "oxlint",
     "test": "node --import tsx/esm --test test/**/*.test.ts",
+    "genre:audit": "tsx scripts/genreAudit.ts",
     "preview": "vite preview"
   },
   "dependencies": {

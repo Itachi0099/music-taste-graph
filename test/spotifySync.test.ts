@@ -1571,3 +1571,97 @@ describe('Section 15 — Artist Genre Accuracy & Canonical Taxonomy Suite', () =
   });
 });
 
+describe('Section 16 — Local Genre Knowledge Engine Suite', () => {
+  const originalFetch = globalThis.fetch;
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  test('1. Damru resolves to Psytrance / Ragatrance with HIGH confidence', async () => {
+    const result = classifyCanonicalGenre([], 'Damru');
+    assert.equal(result.canonicalGenre, 'Psytrance');
+    assert.equal(result.subgenre, 'Ragatrance');
+    assert.equal(result.confidenceLevel, 'HIGH');
+    assert.notEqual(result.canonicalGenre, 'Christian');
+    assert.notEqual(result.canonicalGenre, 'Unknown');
+
+    // Pipeline integration check
+    const resolved = await resolveArtistGenres([{ artistName: 'Damru' }]);
+    assert.ok(resolved['Damru']);
+    assert.equal(resolved['Damru'].canonicalGenre, 'Psytrance');
+    assert.equal(resolved['Damru'].subgenre, 'Ragatrance');
+    assert.notEqual(resolved['Damru'].canonicalGenre, 'Christian');
+  });
+
+  test('2. SZA, Frank Ocean, The Weeknd resolve to R&B with HIGH confidence', () => {
+    const sza = classifyCanonicalGenre(['pop', 'contemporary r&b', 'urban contemporary'], 'SZA');
+    assert.equal(sza.canonicalGenre, 'R&B');
+    assert.equal(sza.subgenre, 'Contemporary R&B');
+    assert.equal(sza.confidenceLevel, 'HIGH');
+
+    const frank = classifyCanonicalGenre(['neo soul', 'r&b', 'pop'], 'Frank Ocean');
+    assert.equal(frank.canonicalGenre, 'R&B');
+    assert.equal(frank.confidenceLevel, 'HIGH');
+
+    const weeknd = classifyCanonicalGenre(['alternative r&b', 'pop', 'canadian contemporary r&b'], 'The Weeknd');
+    assert.equal(weeknd.canonicalGenre, 'R&B');
+    assert.equal(weeknd.subgenre, 'Alternative R&B');
+    assert.equal(weeknd.confidenceLevel, 'HIGH');
+  });
+
+  test('3. Psytrance subgenre hierarchy: Astrix, Kindzadza, Kashyyyk resolve with HIGH confidence', () => {
+    const astrix = classifyCanonicalGenre(['psytrance', 'goa trance', 'full-on psy'], 'Astrix');
+    assert.equal(astrix.canonicalGenre, 'Psytrance');
+    assert.equal(astrix.confidenceLevel, 'HIGH');
+
+    const kindzadza = classifyCanonicalGenre(['hi-tech', 'psychedelic trance'], 'Kindzadza');
+    assert.equal(kindzadza.canonicalGenre, 'Psytrance');
+    assert.equal(kindzadza.subgenre, 'Hi-Tech');
+    assert.equal(kindzadza.confidenceLevel, 'HIGH');
+
+    const kashyyyk = classifyCanonicalGenre(['darkpsy', 'psycore'], 'Kashyyyk');
+    assert.equal(kashyyyk.canonicalGenre, 'Psytrance');
+    assert.equal(kashyyyk.subgenre, 'Darkpsy');
+    assert.equal(kashyyyk.confidenceLevel, 'HIGH');
+  });
+
+  test('4. External provider song-title homonym protection prevents catalog pollution', async () => {
+    // Simulate iTunes returning a song titled "Damru" by a devotional artist "Siddharth Mohan" (Apple genre: Christian & Gospel)
+    globalThis.fetch = async (url: RequestInfo | URL) => {
+      const u = String(url);
+      if (u.includes('entity=song')) {
+        return new Response(JSON.stringify({
+          results: [{
+            artistName: 'Siddharth Mohan',
+            trackName: 'Damru',
+            primaryGenreName: 'Christian & Gospel',
+          }],
+        }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ results: [] }), { status: 200 });
+    };
+
+    // If an unknown artist matches an iTunes track title by another artist, it must NOT inherit the wrong artist's genre
+    const resolved = await resolveArtistGenres([{ artistName: 'UnrelatedArtist', trackTitle: 'Damru' }]);
+    assert.notEqual(resolved['UnrelatedArtist'].canonicalGenre, 'Christian');
+    assert.equal(resolved['UnrelatedArtist'].canonicalGenre, 'Unknown');
+  });
+
+  test('5. First-class confidence level derivation', () => {
+    // Multi-signal agreement -> HIGH
+    const high = classifyCanonicalGenre(['pop', 'contemporary r&b', 'urban contemporary'], 'Artist A');
+    assert.equal(high.confidenceLevel, 'HIGH');
+
+    // Single signal -> MEDIUM
+    const med = classifyCanonicalGenre(['trap'], 'Artist B');
+    assert.equal(med.confidenceLevel, 'MEDIUM');
+
+    // Empty -> UNKNOWN
+    const unknown = classifyCanonicalGenre([], 'Artist C');
+    assert.equal(unknown.confidenceLevel, 'UNKNOWN');
+    assert.equal(unknown.confidence, 0);
+  });
+});
+
+
