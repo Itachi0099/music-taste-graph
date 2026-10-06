@@ -136,6 +136,27 @@ export const CelestialUniverseCanvas: React.FC<CelestialUniverseCanvasProps> = (
     destName: '',
   });
 
+  // Accessibility: prefers-reduced-motion detection (WCAG 2.3.3)
+  const prefersReducedMotionRef = useRef<boolean>(false);
+  useEffect(() => {
+    if (typeof window === 'undefined' || !window.matchMedia) return;
+    const mediaQuery = window.matchMedia('(prefers-reduced-motion: reduce)');
+    prefersReducedMotionRef.current = mediaQuery.matches;
+
+    const handleChange = (e: MediaQueryListEvent | MediaQueryList) => {
+      prefersReducedMotionRef.current = e.matches;
+    };
+
+    if (mediaQuery.addEventListener) {
+      mediaQuery.addEventListener('change', handleChange);
+      return () => mediaQuery.removeEventListener('change', handleChange);
+    } else if ((mediaQuery as any).addListener) {
+      // Legacy Safari / browser compatibility
+      (mediaQuery as any).addListener(handleChange);
+      return () => (mediaQuery as any).removeListener(handleChange);
+    }
+  }, []);
+
   // Initialize astronomical deep space star field (pure, varied micro-stars)
   useEffect(() => {
     hyperspaceRef.current.stars = createDeepSpaceStarField(700, 3600);
@@ -153,6 +174,18 @@ export const CelestialUniverseCanvas: React.FC<CelestialUniverseCanvasProps> = (
       cam.targetX = targetX;
       cam.targetY = targetY;
       cam.targetZoom = targetZoom;
+      return;
+    }
+
+    // If prefers-reduced-motion is enabled, bypass the 1400ms warp flight and navigate directly
+    if (prefersReducedMotionRef.current) {
+      cam.targetX = targetX;
+      cam.targetY = targetY;
+      cam.targetZoom = targetZoom;
+      cam.x = targetX;
+      cam.y = targetY;
+      cam.zoom = targetZoom;
+      hyperspaceRef.current.active = false;
       return;
     }
 
@@ -327,8 +360,11 @@ export const CelestialUniverseCanvas: React.FC<CelestialUniverseCanvasProps> = (
         currentZoomLevelRef.current = activeLevel;
         setCurrentZoomLevel(activeLevel);
       }
-      // Advance time for subtle celestial drift
-      animTimeRef.current += 0.012;
+      // Advance time for subtle celestial drift only when reduced motion is not requested
+      const isReducedMotion = prefersReducedMotionRef.current;
+      if (!isReducedMotion) {
+        animTimeRef.current += 0.012;
+      }
       const time = animTimeRef.current;
 
       ctx.save();
@@ -387,8 +423,8 @@ export const CelestialUniverseCanvas: React.FC<CelestialUniverseCanvasProps> = (
       universeData.artists.forEach((artist) => {
         const isArtistHovered = currentHover?.type === 'artist' && currentHover.item.id === artist.id;
         const isArtistSelected = selection?.type === 'artist' && selection.item.id === artist.id;
-        // Motion damping on hover/select allows effortless reading and inspection without jitter
-        const motionDamp = isArtistHovered ? 0.25 : isArtistSelected ? 0.35 : 1.0;
+        // Motion damping on hover/select allows effortless reading and inspection without jitter; zero velocity in reduced motion
+        const motionDamp = isReducedMotion ? 0 : isArtistHovered ? 0.25 : isArtistSelected ? 0.35 : 1.0;
 
         if (artist.isBridge && artist.bridgeSaddle) {
           // Cross-genre bridge artist: orbital motion along gravitational saddle between Genre A & B
@@ -410,9 +446,11 @@ export const CelestialUniverseCanvas: React.FC<CelestialUniverseCanvasProps> = (
 
         // Update track moons relative to updated artist planetary position
         artist.tracks.forEach((track) => {
-          track.orbitAngle = (track.orbitAngle ?? 0) + (track.orbitSpeed || 0.0035);
-          track.x = artist.x + Math.cos(track.orbitAngle) * track.orbitRadius;
-          track.y = artist.y + Math.sin(track.orbitAngle) * track.orbitRadius;
+          if (!isReducedMotion) {
+            track.orbitAngle = (track.orbitAngle ?? 0) + (track.orbitSpeed || 0.0035);
+          }
+          track.x = artist.x + Math.cos(track.orbitAngle ?? 0) * track.orbitRadius;
+          track.y = artist.y + Math.sin(track.orbitAngle ?? 0) * track.orbitRadius;
         });
       });
 
@@ -921,8 +959,8 @@ export const CelestialUniverseCanvas: React.FC<CelestialUniverseCanvasProps> = (
           const isMeteorSelected = selection?.type === 'meteor' && selection.item.id === meteor.id;
           const isMeteorHovered = currentHover?.type === 'meteor' && currentHover.item.id === meteor.id;
 
-          // Continuous meteor progress along trajectory, easing gently on hover or selection without getting stuck
-          const meteorDamp = isMeteorHovered ? 0.25 : isMeteorSelected ? 0.35 : 1.0;
+          // Continuous meteor progress along trajectory, easing gently on hover or selection; frozen in reduced motion
+          const meteorDamp = isReducedMotion ? 0 : isMeteorHovered ? 0.25 : isMeteorSelected ? 0.35 : 1.0;
           meteor.progress += (meteor.speed || 0.0035) * meteorDamp;
           if (meteor.progress >= 1.0) {
             meteor.progress = 0.0;
